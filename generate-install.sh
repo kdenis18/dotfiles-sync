@@ -90,18 +90,57 @@ echo "Scanning MCP servers..."
   echo 'echo ""'
 } >> "$OUTPUT"
 
-# Local MCPs from settings.json (user-scoped, added via `claude mcp add`)
+# Local MCPs — Claude Code stores them in ~/.claude.json (not ~/.claude/settings.json)
 SETTINGS_FILE="$HOME/.claude/settings.json"
+MCP_FILE="$HOME/.claude.json"
+# Fall back to settings.json if ~/.claude.json has no mcpServers
+if ! { [[ -f "$MCP_FILE" ]] && command -v jq &>/dev/null && jq -e '(.mcpServers // {}) | length > 0' "$MCP_FILE" &>/dev/null; }; then
+  MCP_FILE="$SETTINGS_FILE"
+fi
 HAS_LOCAL_MCPS=false
-if [[ -f "$SETTINGS_FILE" ]] && command -v jq &>/dev/null; then
-  MCP_KEYS=$(jq -r '.mcpServers // {} | keys[]' "$SETTINGS_FILE" 2>/dev/null || true)
+if [[ -f "$MCP_FILE" ]] && command -v jq &>/dev/null; then
+  MCP_KEYS=$(jq -r '.mcpServers // {} | keys[]' "$MCP_FILE" 2>/dev/null || true)
   if [[ -n "$MCP_KEYS" ]]; then
     HAS_LOCAL_MCPS=true
     while IFS= read -r name; do
-      server_json=$(jq -c ".mcpServers[\"$name\"]" "$SETTINGS_FILE")
-      # Escape for embedding in script
-      escaped_json=$(printf '%s' "$server_json" | sed "s/'/'\\\\''/g")
-      cat >> "$OUTPUT" << MCPEOF
+      server_json=$(jq -c ".mcpServers[\"$name\"]" "$MCP_FILE")
+
+      # Find env keys that look like secrets
+      secret_env_keys=""
+      while IFS= read -r env_key; do
+        if echo "$env_key" | grep -qE '(TOKEN|KEY|SECRET|PASSWORD|PASS|API)'; then
+          secret_env_keys="$secret_env_keys $env_key"
+        fi
+      done < <(echo "$server_json" | jq -r '.env // {} | keys[]' 2>/dev/null || true)
+
+      if [[ -n "$secret_env_keys" ]]; then
+        # Redact secret env values before embedding
+        server_json=$(echo "$server_json" | jq -c 'if .env then .env |= with_entries(if (.key | test("TOKEN|KEY|SECRET|PASSWORD|PASS|API"; "i")) then .value = "CHANGEME" else . end) else . end')
+        safe_json_var="_mcp_$(echo "$name" | tr '-' '_')_json"
+        escaped_json=$(printf '%s' "$server_json" | sed "s/'/'\\\\''/g")
+        cat >> "$OUTPUT" << MCPEOF
+# SECRETS REQUIRED for $name:$secret_env_keys
+# Edit $safe_json_var below to fill in the real values before running
+$safe_json_var='$escaped_json'
+if prompt_yn "Install MCP server: $name [SECRETS — edit $safe_json_var above first]"; then
+  if echo "\$$safe_json_var" | grep -q '"CHANGEME"'; then
+    echo -e "  \${YELLOW}Skipped: fill in secret values in $safe_json_var first\${NC}"
+    SKIPPED=\$((SKIPPED + 1))
+  elif claude mcp list 2>/dev/null | grep -q "$name"; then
+    echo -e "  \${YELLOW}Already installed, skipped\${NC}"
+    SKIPPED=\$((SKIPPED + 1))
+  else
+    claude mcp add-json '$name' "\$$safe_json_var" -s user
+    echo -e "  \${GREEN}Installed\${NC}"
+    INSTALLED=\$((INSTALLED + 1))
+  fi
+fi
+echo ""
+
+MCPEOF
+      else
+        escaped_json=$(printf '%s' "$server_json" | sed "s/'/'\\\\''/g")
+        cat >> "$OUTPUT" << MCPEOF
 if prompt_yn "Install MCP server: $name"; then
   if claude mcp list 2>/dev/null | grep -q "$name"; then
     echo -e "  \${YELLOW}Already installed, skipped\${NC}"
@@ -115,6 +154,7 @@ fi
 echo ""
 
 MCPEOF
+      fi
     done <<< "$MCP_KEYS"
   fi
 fi
@@ -189,9 +229,35 @@ ITEMEOF
     emit_zsh_item "alias" "$line"
   done < <(grep -E '^alias ' "$ZSHRC" || true)
 
-  # Extract exports (non-PATH)
+  # Helper: emit a secret export block — value redacted to CHANGEME, skipped at runtime if not set
+  emit_secret_export() {
+    local var_name="$1"
+    local safe_var="_secret_$(echo "$var_name" | tr '[:upper:]' '[:lower:]')"
+    cat >> "$OUTPUT" << SECRETEOF
+# SECRET: fill in the real value for $var_name before running this script
+$safe_var='CHANGEME'
+if prompt_yn "Add: export $var_name [SECRET — edit \$${safe_var} above first]"; then
+  if [[ "\$$safe_var" == "CHANGEME" ]]; then
+    echo -e "  \${YELLOW}Skipped: value is still CHANGEME — set it before running\${NC}"
+    SKIPPED=\$((SKIPPED + 1))
+  else
+    append_to_zshrc "export $var_name=\$$safe_var"
+  fi
+fi
+echo ""
+
+SECRETEOF
+    ZSH_ITEMS=$((ZSH_ITEMS + 1))
+  }
+
+  # Extract exports (non-PATH), redacting secrets
   while IFS= read -r line; do
-    emit_zsh_item "export" "$line"
+    var_name=$(echo "$line" | sed -E 's/^export ([A-Z_][A-Z0-9_]*)=.*/\1/')
+    if echo "$var_name" | grep -qE '(TOKEN|KEY|SECRET|PASSWORD|PASS|API)'; then
+      emit_secret_export "$var_name"
+    else
+      emit_zsh_item "export" "$line"
+    fi
   done < <(grep -E '^export ' "$ZSHRC" | grep -v 'PATH=' || true)
 
   # Extract PATH entries
@@ -256,7 +322,40 @@ if [[ "$ZSH_ITEMS" -eq 0 ]]; then
 fi
 echo 'echo ""' >> "$OUTPUT"
 
-# ─── Section: Claude Plugins/Marketplaces ─────────────────────────────────
+# ─── Section: RTK ────────────────────────────────────────────────────────────
+
+echo "Scanning RTK..."
+
+{
+  echo 'echo "=== RTK (token optimizer) ==="'
+  echo 'echo ""'
+} >> "$OUTPUT"
+
+if command -v rtk &>/dev/null; then
+  RTK_VERSION=$(rtk --version 2>/dev/null | awk '{print $NF}')
+  cat >> "$OUTPUT" << RTKEOF
+if prompt_yn "Install rtk $RTK_VERSION (brew install rtk)"; then
+  if command -v rtk &>/dev/null; then
+    echo -e "  \${YELLOW}Already installed (\$(rtk --version 2>/dev/null)), skipped\${NC}"
+    SKIPPED=\$((SKIPPED + 1))
+  elif command -v brew &>/dev/null; then
+    brew install rtk
+    echo -e "  \${GREEN}Installed\${NC}"
+    INSTALLED=\$((INSTALLED + 1))
+  else
+    echo -e "  \${YELLOW}Homebrew not found — install brew first, then: brew install rtk\${NC}"
+    SKIPPED=\$((SKIPPED + 1))
+  fi
+fi
+echo ""
+
+RTKEOF
+else
+  echo 'echo "  rtk not found on source machine, skipping."' >> "$OUTPUT"
+  echo 'echo ""' >> "$OUTPUT"
+fi
+
+# ─── Section: Claude Plugins ─────────────────────────────────────────────────
 
 echo "Scanning Claude plugins..."
 
@@ -265,28 +364,54 @@ echo "Scanning Claude plugins..."
   echo 'echo ""'
 } >> "$OUTPUT"
 
+INSTALLED_PLUGINS_FILE="$HOME/.claude/plugins/installed_plugins.json"
 MARKETPLACES_FILE="$HOME/.claude/plugins/known_marketplaces.json"
+
+# Emit marketplace install first (plugins depend on it)
 if [[ -f "$MARKETPLACES_FILE" ]] && command -v jq &>/dev/null; then
   MARKETPLACE_NAMES=$(jq -r 'keys[]' "$MARKETPLACES_FILE" 2>/dev/null || true)
   if [[ -n "$MARKETPLACE_NAMES" ]]; then
     while IFS= read -r mkt_name; do
-      source_type=$(jq -r ".\"$mkt_name\".source.source" "$MARKETPLACES_FILE")
       source_repo=$(jq -r ".\"$mkt_name\".source.repo" "$MARKETPLACES_FILE")
       cat >> "$OUTPUT" << MKTEOF
-if prompt_yn "Install plugin marketplace: $mkt_name ($source_repo)"; then
+if prompt_yn "Add plugin marketplace: $mkt_name (github:$source_repo)"; then
   if [[ -d "\$HOME/.claude/plugins/marketplaces/$mkt_name" ]]; then
-    echo -e "  \${YELLOW}Already installed, skipped\${NC}"
+    echo -e "  \${YELLOW}Already added, skipped\${NC}"
     SKIPPED=\$((SKIPPED + 1))
   else
-    echo "  Installing $mkt_name from $source_repo..."
-    echo "  (Use Claude Code's plugin manager to add this marketplace)"
-    echo -e "  \${YELLOW}Manual step required\${NC}"
+    claude plugins marketplace add "github:$source_repo"
+    echo -e "  \${GREEN}Added\${NC}"
+    INSTALLED=\$((INSTALLED + 1))
   fi
 fi
 echo ""
 
 MKTEOF
     done <<< "$MARKETPLACE_NAMES"
+  fi
+fi
+
+# Emit each installed plugin
+if [[ -f "$INSTALLED_PLUGINS_FILE" ]] && command -v jq &>/dev/null; then
+  PLUGIN_KEYS=$(jq -r '.plugins | keys[]' "$INSTALLED_PLUGINS_FILE" 2>/dev/null || true)
+  if [[ -n "$PLUGIN_KEYS" ]]; then
+    while IFS= read -r plugin_key; do
+      plugin_version=$(jq -r ".plugins[\"$plugin_key\"][0].version" "$INSTALLED_PLUGINS_FILE")
+      cat >> "$OUTPUT" << PLUGINEOF
+if prompt_yn "Install Claude plugin: $plugin_key@$plugin_version"; then
+  if claude plugins list 2>/dev/null | grep -q "$plugin_key"; then
+    echo -e "  \${YELLOW}Already installed, skipped\${NC}"
+    SKIPPED=\$((SKIPPED + 1))
+  else
+    claude plugins install "$plugin_key" -s user
+    echo -e "  \${GREEN}Installed\${NC}"
+    INSTALLED=\$((INSTALLED + 1))
+  fi
+fi
+echo ""
+
+PLUGINEOF
+    done <<< "$PLUGIN_KEYS"
   fi
 fi
 
