@@ -1,0 +1,25 @@
+{
+  "tools": [
+    {
+      "name": "oh-my-zsh",
+      "label": "oh-my-zsh",
+      "check_path": "$HOME/.oh-my-zsh",
+      "install_cmd": "sh -c \"$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)\"",
+      "config_dirs": [
+        {
+          "note": "Custom themes and plugins only — example files are excluded",
+          "src": "$HOME/.oh-my-zsh/custom",
+          "dest": "$HOME/.oh-my-zsh/custom",
+          "exclude": ["example.zsh-theme", "example.zsh", "example"]
+        }
+      ]
+    },
+    {
+      "name": "iterm2",
+      "label": "iTerm2",
+      "check_path": "/Applications/iTerm.app",
+      "brew_cask": "iterm2",
+      "prefs_plist": "com.googlecode.iterm2"
+    }
+  ]
+}

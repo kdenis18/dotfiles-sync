@@ -105,6 +105,14 @@ if [[ -f "$MCP_FILE" ]] && command -v jq &>/dev/null; then
     while IFS= read -r name; do
       server_json=$(jq -c ".mcpServers[\"$name\"]" "$MCP_FILE")
 
+      # Detect and replace absolute $HOME paths with @@HOME@@ placeholder
+      has_abs_path=false
+      if echo "$server_json" | grep -q "$HOME"; then
+        server_json=$(echo "$server_json" | sed "s|$HOME|@@HOME@@|g")
+        has_abs_path=true
+        echo "  WARNING: $name MCP contains absolute paths — will be rewritten to use \$HOME on target"
+      fi
+
       # Find env keys that look like secrets
       secret_env_keys=""
       while IFS= read -r env_key; do
@@ -113,26 +121,51 @@ if [[ -f "$MCP_FILE" ]] && command -v jq &>/dev/null; then
         fi
       done < <(echo "$server_json" | jq -r '.env // {} | keys[]' 2>/dev/null || true)
 
+      safe_json_var="_mcp_$(echo "$name" | tr '-' '_')_json"
+
       if [[ -n "$secret_env_keys" ]]; then
         # Redact secret env values before embedding
         server_json=$(echo "$server_json" | jq -c 'if .env then .env |= with_entries(if (.key | test("TOKEN|KEY|SECRET|PASSWORD|PASS|API"; "i")) then .value = "CHANGEME" else . end) else . end')
-        safe_json_var="_mcp_$(echo "$name" | tr '-' '_')_json"
         escaped_json=$(printf '%s' "$server_json" | sed "s/'/'\\\\''/g")
+        # Build secret keys list for the for loop
+        secret_keys_list=$(echo "$secret_env_keys" | tr -s ' ' | sed 's/^ //')
         cat >> "$OUTPUT" << MCPEOF
 # SECRETS REQUIRED for $name:$secret_env_keys
-# Edit $safe_json_var below to fill in the real values before running
+# Edit $safe_json_var below, or the script will prompt at runtime
 $safe_json_var='$escaped_json'
-if prompt_yn "Install MCP server: $name [SECRETS — edit $safe_json_var above first]"; then
-  if echo "\$$safe_json_var" | grep -q '"CHANGEME"'; then
-    echo -e "  \${YELLOW}Skipped: fill in secret values in $safe_json_var first\${NC}"
-    SKIPPED=\$((SKIPPED + 1))
-  elif claude mcp list 2>/dev/null | grep -q "$name"; then
-    echo -e "  \${YELLOW}Already installed, skipped\${NC}"
-    SKIPPED=\$((SKIPPED + 1))
-  else
-    claude mcp add-json '$name' "\$$safe_json_var" -s user
-    echo -e "  \${GREEN}Installed\${NC}"
-    INSTALLED=\$((INSTALLED + 1))
+MCPEOF
+        if [[ "$has_abs_path" == true ]]; then
+          cat >> "$OUTPUT" << MCPEOF
+# PATH NOTE: @@HOME@@ will be replaced with your actual \$HOME
+$safe_json_var="\${${safe_json_var}//@@HOME@@/\$HOME}"
+MCPEOF
+        fi
+        cat >> "$OUTPUT" << MCPEOF
+if prompt_yn "Install MCP server: $name"; then
+  _json="\$$safe_json_var"
+  _skip=false
+  for _key in $secret_keys_list; do
+    if echo "\$_json" | grep -q "\"\$_key\":\"CHANGEME\""; then
+      printf "  Enter value for %s (Enter to skip): " "\$_key"
+      read -r _val
+      if [[ -z "\$_val" ]]; then
+        echo -e "  \${YELLOW}Skipped: \$_key not provided\${NC}"
+        SKIPPED=\$((SKIPPED + 1))
+        _skip=true
+        break
+      fi
+      _json="\${_json/\"\$_key\":\"CHANGEME\"/\"\$_key\":\"\$_val\"}"
+    fi
+  done
+  if [[ "\$_skip" != true ]]; then
+    if claude mcp list 2>/dev/null | grep -q "$name"; then
+      echo -e "  \${YELLOW}Already installed, skipped\${NC}"
+      SKIPPED=\$((SKIPPED + 1))
+    else
+      claude mcp add-json '$name' "\$_json" -s user
+      echo -e "  \${GREEN}Installed\${NC}"
+      INSTALLED=\$((INSTALLED + 1))
+    fi
   fi
 fi
 echo ""
@@ -141,12 +174,21 @@ MCPEOF
       else
         escaped_json=$(printf '%s' "$server_json" | sed "s/'/'\\\\''/g")
         cat >> "$OUTPUT" << MCPEOF
+$safe_json_var='$escaped_json'
+MCPEOF
+        if [[ "$has_abs_path" == true ]]; then
+          cat >> "$OUTPUT" << MCPEOF
+# PATH NOTE: @@HOME@@ will be replaced with your actual \$HOME
+$safe_json_var="\${${safe_json_var}//@@HOME@@/\$HOME}"
+MCPEOF
+        fi
+        cat >> "$OUTPUT" << MCPEOF
 if prompt_yn "Install MCP server: $name"; then
   if claude mcp list 2>/dev/null | grep -q "$name"; then
     echo -e "  \${YELLOW}Already installed, skipped\${NC}"
     SKIPPED=\$((SKIPPED + 1))
   else
-    claude mcp add-json '$name' '$escaped_json' -s user
+    claude mcp add-json '$name' "\$$safe_json_var" -s user
     echo -e "  \${GREEN}Installed\${NC}"
     INSTALLED=\$((INSTALLED + 1))
   fi
@@ -229,17 +271,23 @@ ITEMEOF
     emit_zsh_item "alias" "$line"
   done < <(grep -E '^alias ' "$ZSHRC" || true)
 
-  # Helper: emit a secret export block — value redacted to CHANGEME, skipped at runtime if not set
+  # Helper: emit a secret export block — value redacted to CHANGEME, prompts at runtime if still CHANGEME
   emit_secret_export() {
     local var_name="$1"
     local safe_var="_secret_$(echo "$var_name" | tr '[:upper:]' '[:lower:]')"
     cat >> "$OUTPUT" << SECRETEOF
-# SECRET: fill in the real value for $var_name before running this script
+# SECRET: fill in the real value for $var_name, or enter it when prompted
 $safe_var='CHANGEME'
-if prompt_yn "Add: export $var_name [SECRET — edit \$${safe_var} above first]"; then
+if prompt_yn "Add: export $var_name [SECRET]"; then
   if [[ "\$$safe_var" == "CHANGEME" ]]; then
-    echo -e "  \${YELLOW}Skipped: value is still CHANGEME — set it before running\${NC}"
-    SKIPPED=\$((SKIPPED + 1))
+    printf "  Enter value for $var_name (Enter to skip): "
+    read -r _input_val
+    if [[ -z "\$_input_val" ]]; then
+      echo -e "  \${YELLOW}Skipped\${NC}"
+      SKIPPED=\$((SKIPPED + 1))
+    else
+      append_to_zshrc "export $var_name=\$_input_val"
+    fi
   else
     append_to_zshrc "export $var_name=\$$safe_var"
   fi
@@ -421,20 +469,24 @@ echo 'echo ""' >> "$OUTPUT"
 if [[ -f "$SETTINGS_FILE" ]] && command -v jq &>/dev/null; then
   # Extract non-MCP settings
   settings_no_mcp=$(jq -c 'del(.mcpServers)' "$SETTINGS_FILE" 2>/dev/null || true)
+  # Replace hardcoded home path with @@HOME@@ so it resolves correctly on the target machine
+  settings_no_mcp=$(echo "$settings_no_mcp" | sed "s|$HOME|@@HOME@@|g")
   if [[ -n "$settings_no_mcp" && "$settings_no_mcp" != "{}" ]]; then
     escaped_settings=$(printf '%s' "$settings_no_mcp" | sed "s/'/'\\\\''/g")
     cat >> "$OUTPUT" << SETTINGSEOF
+_settings_json='$escaped_settings'
+_settings_json="\${_settings_json//@@HOME@@/\$HOME}"
 echo "  Current source machine settings.json (excluding MCPs):"
-echo '  $escaped_settings'
+echo "  \$_settings_json"
 echo ""
 if prompt_yn "Merge these settings into ~/.claude/settings.json"; then
   if command -v jq &>/dev/null; then
     if [[ -f "\$HOME/.claude/settings.json" ]]; then
-      jq -s '.[0] * .[1]' "\$HOME/.claude/settings.json" <(echo '$escaped_settings') > "\$HOME/.claude/settings.json.tmp"
+      jq -s '.[0] * .[1]' "\$HOME/.claude/settings.json" <(echo "\$_settings_json") > "\$HOME/.claude/settings.json.tmp"
       mv "\$HOME/.claude/settings.json.tmp" "\$HOME/.claude/settings.json"
     else
       mkdir -p "\$HOME/.claude"
-      echo '$escaped_settings' | jq '.' > "\$HOME/.claude/settings.json"
+      echo "\$_settings_json" | jq '.' > "\$HOME/.claude/settings.json"
     fi
     echo -e "  \${GREEN}Merged\${NC}"
     INSTALLED=\$((INSTALLED + 1))
@@ -447,6 +499,337 @@ echo ""
 
 SETTINGSEOF
   fi
+fi
+
+# ─── Section: Version Managers ───────────────────────────────────────────────
+
+echo "Scanning version managers..."
+
+{
+  echo 'echo "=== Version Managers ==="'
+  echo 'echo ""'
+} >> "$OUTPUT"
+
+_vm_found=false
+
+# rbenv
+if command -v rbenv &>/dev/null; then
+  _vm_found=true
+  rbenv_version=$(cat "$HOME/.rbenv/version" 2>/dev/null || rbenv version-name 2>/dev/null || echo "")
+  rbenv_tool_version=$(rbenv --version 2>/dev/null | awk '{print $2}')
+  echo "  Found: rbenv $rbenv_tool_version"
+
+  cat >> "$OUTPUT" << RBENVEOF
+if prompt_yn "Install rbenv (brew install rbenv ruby-build)"; then
+  if command -v rbenv &>/dev/null; then
+    echo -e "  \${YELLOW}Already installed (\$(rbenv --version 2>/dev/null)), skipped\${NC}"
+    SKIPPED=\$((SKIPPED + 1))
+  elif command -v brew &>/dev/null; then
+    brew install rbenv ruby-build
+    echo -e "  \${GREEN}Installed\${NC}"
+    INSTALLED=\$((INSTALLED + 1))
+  else
+    echo -e "  \${YELLOW}Homebrew not found — install brew first\${NC}"
+    SKIPPED=\$((SKIPPED + 1))
+  fi
+fi
+echo ""
+
+RBENVEOF
+
+  if [[ -n "$rbenv_version" ]]; then
+    cat >> "$OUTPUT" << RUBYEOF
+if prompt_yn "Install Ruby $rbenv_version via rbenv (rbenv install $rbenv_version && rbenv global $rbenv_version)"; then
+  if command -v rbenv &>/dev/null; then
+    if rbenv versions 2>/dev/null | grep -q "$rbenv_version"; then
+      echo -e "  \${YELLOW}Already installed, skipped\${NC}"
+      SKIPPED=\$((SKIPPED + 1))
+    else
+      rbenv install $rbenv_version
+      rbenv global $rbenv_version
+      echo -e "  \${GREEN}Installed and set as global\${NC}"
+      INSTALLED=\$((INSTALLED + 1))
+    fi
+  else
+    echo -e "  \${YELLOW}rbenv not installed — install rbenv first\${NC}"
+    SKIPPED=\$((SKIPPED + 1))
+  fi
+fi
+echo ""
+
+RUBYEOF
+  fi
+fi
+
+# nvm
+if [[ -d "$HOME/.nvm" ]]; then
+  _vm_found=true
+  node_default=$(cat "$HOME/.nvm/alias/default" 2>/dev/null || echo "")
+  nvm_version=$(grep 'NVM_VERSION' "$HOME/.nvm/nvm.sh" 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || echo "")
+  echo "  Found: nvm $nvm_version"
+
+  if [[ -n "$nvm_version" ]]; then
+    cat >> "$OUTPUT" << NVMEOF
+if prompt_yn "Install nvm via curl"; then
+  if [[ -d "\$HOME/.nvm" ]]; then
+    echo -e "  \${YELLOW}Already installed, skipped\${NC}"
+    SKIPPED=\$((SKIPPED + 1))
+  else
+    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v${nvm_version}/install.sh | bash
+    echo -e "  \${GREEN}Installed (restart shell or source ~/.zshrc to activate)\${NC}"
+    INSTALLED=\$((INSTALLED + 1))
+  fi
+fi
+echo ""
+
+NVMEOF
+  else
+    cat >> "$OUTPUT" << NVMEOF
+if prompt_yn "Install nvm via curl"; then
+  if [[ -d "\$HOME/.nvm" ]]; then
+    echo -e "  \${YELLOW}Already installed, skipped\${NC}"
+    SKIPPED=\$((SKIPPED + 1))
+  else
+    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/install.sh | bash
+    echo -e "  \${GREEN}Installed (restart shell or source ~/.zshrc to activate)\${NC}"
+    INSTALLED=\$((INSTALLED + 1))
+  fi
+fi
+echo ""
+
+NVMEOF
+  fi
+
+  if [[ -n "$node_default" ]]; then
+    cat >> "$OUTPUT" << NODEEOF
+if prompt_yn "Install Node $node_default via nvm (default)"; then
+  if command -v nvm &>/dev/null || [[ -s "\$HOME/.nvm/nvm.sh" ]]; then
+    export NVM_DIR="\$HOME/.nvm"
+    \. "\$NVM_DIR/nvm.sh" 2>/dev/null
+    if nvm ls $node_default &>/dev/null 2>&1; then
+      echo -e "  \${YELLOW}Already installed, skipped\${NC}"
+      SKIPPED=\$((SKIPPED + 1))
+    else
+      nvm install $node_default
+      nvm alias default $node_default
+      echo -e "  \${GREEN}Installed and set as default\${NC}"
+      INSTALLED=\$((INSTALLED + 1))
+    fi
+  else
+    echo -e "  \${YELLOW}nvm not installed — install nvm first\${NC}"
+    SKIPPED=\$((SKIPPED + 1))
+  fi
+fi
+echo ""
+
+NODEEOF
+  fi
+fi
+
+# pyenv
+if command -v pyenv &>/dev/null; then
+  _vm_found=true
+  pyenv_version=$(cat "$HOME/.pyenv/version" 2>/dev/null || echo "")
+  pyenv_tool_version=$(pyenv --version 2>/dev/null | awk '{print $2}')
+  echo "  Found: pyenv $pyenv_tool_version"
+
+  cat >> "$OUTPUT" << PYENVEOF
+if prompt_yn "Install pyenv (brew install pyenv)"; then
+  if command -v pyenv &>/dev/null; then
+    echo -e "  \${YELLOW}Already installed (\$(pyenv --version 2>/dev/null)), skipped\${NC}"
+    SKIPPED=\$((SKIPPED + 1))
+  elif command -v brew &>/dev/null; then
+    brew install pyenv
+    echo -e "  \${GREEN}Installed\${NC}"
+    INSTALLED=\$((INSTALLED + 1))
+  else
+    echo -e "  \${YELLOW}Homebrew not found — install brew first\${NC}"
+    SKIPPED=\$((SKIPPED + 1))
+  fi
+fi
+echo ""
+
+PYENVEOF
+
+  if [[ -n "$pyenv_version" ]]; then
+    cat >> "$OUTPUT" << PYTHONEOF
+if prompt_yn "Install Python $pyenv_version via pyenv (pyenv install $pyenv_version && pyenv global $pyenv_version)"; then
+  if command -v pyenv &>/dev/null; then
+    if pyenv versions 2>/dev/null | grep -q "$pyenv_version"; then
+      echo -e "  \${YELLOW}Already installed, skipped\${NC}"
+      SKIPPED=\$((SKIPPED + 1))
+    else
+      pyenv install $pyenv_version
+      pyenv global $pyenv_version
+      echo -e "  \${GREEN}Installed and set as global\${NC}"
+      INSTALLED=\$((INSTALLED + 1))
+    fi
+  else
+    echo -e "  \${YELLOW}pyenv not installed — install pyenv first\${NC}"
+    SKIPPED=\$((SKIPPED + 1))
+  fi
+fi
+echo ""
+
+PYTHONEOF
+  fi
+fi
+
+if [[ "$_vm_found" == false ]]; then
+  echo 'echo "  No version managers found."' >> "$OUTPUT"
+  echo 'echo ""' >> "$OUTPUT"
+fi
+
+# ─── Section: Tool Configs (manifest-driven) ─────────────────────────────────
+
+MANIFEST_FILE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/dotfiles-manifest.json"
+
+if [[ -f "$MANIFEST_FILE" ]] && command -v jq &>/dev/null; then
+  echo "Scanning tools from dotfiles-manifest.json..."
+  TOOL_COUNT=$(jq '.tools | length' "$MANIFEST_FILE")
+
+  for i in $(seq 0 $((TOOL_COUNT - 1))); do
+    tool_name=$(jq -r ".tools[$i].name" "$MANIFEST_FILE")
+    tool_label=$(jq -r ".tools[$i].label // .tools[$i].name" "$MANIFEST_FILE")
+    check_path=$(jq -r ".tools[$i].check_path // empty" "$MANIFEST_FILE")
+    install_cmd=$(jq -r ".tools[$i].install_cmd // empty" "$MANIFEST_FILE")
+    install_hint=$(jq -r ".tools[$i].install_hint // empty" "$MANIFEST_FILE")
+    brew_formula=$(jq -r ".tools[$i].brew_formula // empty" "$MANIFEST_FILE")
+    brew_cask=$(jq -r ".tools[$i].brew_cask // empty" "$MANIFEST_FILE")
+    prefs_plist=$(jq -r ".tools[$i].prefs_plist // empty" "$MANIFEST_FILE")
+    # Expand $HOME for generation-time filesystem checks only
+    check_path_expanded="${check_path/\$HOME/$HOME}"
+
+    echo "  Found: $tool_label"
+
+    {
+      echo ""
+      echo "echo \"=== $tool_label ===\""
+      echo 'echo ""'
+    } >> "$OUTPUT"
+
+    # App install step
+    if [[ -n "$install_cmd" ]]; then
+      cat >> "$OUTPUT" << TOOLEOF
+if prompt_yn "Install $tool_label"; then
+  if [[ -e "$check_path" ]]; then
+    echo -e "  \${YELLOW}Already installed, skipped\${NC}"
+    SKIPPED=\$((SKIPPED + 1))
+  else
+    $install_cmd
+    echo -e "  \${GREEN}Installed\${NC}"
+    INSTALLED=\$((INSTALLED + 1))
+  fi
+fi
+echo ""
+
+TOOLEOF
+    elif [[ -n "$brew_cask" ]]; then
+      cat >> "$OUTPUT" << TOOLEOF
+if prompt_yn "Install $tool_label (brew install --cask $brew_cask)"; then
+  if [[ -e "$check_path" ]]; then
+    echo -e "  \${YELLOW}Already installed, skipped\${NC}"
+    SKIPPED=\$((SKIPPED + 1))
+  elif command -v brew &>/dev/null; then
+    brew install --cask $brew_cask
+    echo -e "  \${GREEN}Installed\${NC}"
+    INSTALLED=\$((INSTALLED + 1))
+  else
+    echo -e "  \${YELLOW}Homebrew not found — install brew first, then: brew install --cask $brew_cask\${NC}"
+    SKIPPED=\$((SKIPPED + 1))
+  fi
+fi
+echo ""
+
+TOOLEOF
+    elif [[ -n "$brew_formula" ]]; then
+      cat >> "$OUTPUT" << TOOLEOF
+if prompt_yn "Install $tool_label (brew install $brew_formula)"; then
+  if [[ -e "$check_path" ]]; then
+    echo -e "  \${YELLOW}Already installed, skipped\${NC}"
+    SKIPPED=\$((SKIPPED + 1))
+  elif command -v brew &>/dev/null; then
+    brew install $brew_formula
+    echo -e "  \${GREEN}Installed\${NC}"
+    INSTALLED=\$((INSTALLED + 1))
+  else
+    echo -e "  \${YELLOW}Homebrew not found — install brew first, then: brew install $brew_formula\${NC}"
+    SKIPPED=\$((SKIPPED + 1))
+  fi
+fi
+echo ""
+
+TOOLEOF
+    elif [[ -n "$install_hint" ]]; then
+      cat >> "$OUTPUT" << TOOLEOF
+if [[ ! -e "$check_path" ]]; then
+  echo -e "  \${YELLOW}$tool_label not found — $install_hint\${NC}"
+  echo ""
+fi
+
+TOOLEOF
+    fi
+
+    # macOS plist prefs step (base64-embedded)
+    if [[ -n "$prefs_plist" ]]; then
+      plist_b64=$(defaults export "$prefs_plist" - 2>/dev/null | base64 | tr -d '\n') || true
+      if [[ -n "$plist_b64" ]]; then
+        prefs_marker="PREFS_$(echo "$tool_name" | tr '[:lower:]a-z-' '[:upper:]A-Z_')"
+        cat >> "$OUTPUT" << PREFSEOF
+if prompt_yn "Import $tool_label preferences"; then
+  if [[ -n "$check_path" && ! -e "$check_path" ]]; then
+    echo -e "  \${YELLOW}$tool_label not installed — skipping prefs\${NC}"
+    SKIPPED=\$((SKIPPED + 1))
+  else
+    base64 -d << '$prefs_marker' | defaults import $prefs_plist - && \\
+      echo -e "  \${GREEN}Imported (restart $tool_label to apply)\${NC}" && \\
+      INSTALLED=\$((INSTALLED + 1)) || \\
+      { echo -e "  \${YELLOW}Import failed\${NC}"; SKIPPED=\$((SKIPPED + 1)); }
+$plist_b64
+$prefs_marker
+  fi
+fi
+echo ""
+
+PREFSEOF
+      fi
+    fi
+
+    # Config dirs (e.g. custom themes/plugins)
+    config_dir_count=$(jq ".tools[$i].config_dirs | length // 0" "$MANIFEST_FILE" 2>/dev/null || echo 0)
+    for j in $(seq 0 $((config_dir_count - 1))); do
+      src_dir=$(jq -r ".tools[$i].config_dirs[$j].src" "$MANIFEST_FILE")
+      dest_dir=$(jq -r ".tools[$i].config_dirs[$j].dest" "$MANIFEST_FILE")
+      src_dir_expanded="${src_dir/\$HOME/$HOME}"
+
+      [[ -d "$src_dir_expanded" ]] || continue
+
+      # Build find exclusion args
+      find_args=("$src_dir_expanded" -type f)
+      while IFS= read -r excl; do
+        find_args+=(! -name "$excl" ! -path "*/$excl/*")
+      done < <(jq -r ".tools[$i].config_dirs[$j].exclude[]?" "$MANIFEST_FILE" 2>/dev/null || true)
+
+      while IFS= read -r filepath; do
+        rel_path="${filepath#$src_dir_expanded/}"
+        dest_path="$dest_dir/$rel_path"
+        file_b64=$(base64 < "$filepath" | tr -d '\n')
+        file_marker="FILE_$(echo "$tool_name" | tr '[:lower:]a-z-' '[:upper:]A-Z_')_$(echo "$rel_path" | tr '/.-' '___')"
+        cat >> "$OUTPUT" << FILEEOF
+if prompt_yn "Restore $tool_label config: $rel_path"; then
+  mkdir -p "\$(dirname "$dest_path")"
+  base64 -d << '$file_marker' > "$dest_path"
+$file_b64
+$file_marker
+  echo -e "  \${GREEN}Restored\${NC}"
+  INSTALLED=\$((INSTALLED + 1))
+fi
+echo ""
+
+FILEEOF
+      done < <(find "${find_args[@]}" 2>/dev/null || true)
+    done
+  done
 fi
 
 # ─── Section: Homebrew (optional) ─────────────────────────────────────────
