@@ -575,7 +575,7 @@ SETTINGSEOF
   fi
 fi
 
-# ─── Section: Version Managers ───────────────────────────────────────────────
+# ─── Section: Version Managers (manifest-driven) ────────────────────────────
 
 echo "Scanning version managers..."
 
@@ -586,19 +586,62 @@ echo "Scanning version managers..."
 
 _vm_found=false
 
-# rbenv
-if command -v rbenv &>/dev/null; then
-  _vm_found=true
-  rbenv_version=$(cat "$HOME/.rbenv/version" 2>/dev/null || rbenv version-name 2>/dev/null || echo "")
-  rbenv_tool_version=$(rbenv --version 2>/dev/null | awk '{print $2}')
-  echo "  Found: rbenv $rbenv_tool_version"
+if [[ -f "$MANIFEST_FILE" ]] && command -v jq &>/dev/null; then
+  VM_COUNT=$(jq '.version_managers | length // 0' "$MANIFEST_FILE" 2>/dev/null || echo 0)
 
-  cat >> "$OUTPUT" << RBENVEOF
-if prompt_yn "Install rbenv (brew install rbenv ruby-build)"; then
-  if command -v rbenv &>/dev/null; then
-    mark_skipped "Already installed (\$(rbenv --version 2>/dev/null)), skipped"
+  for vi in $(seq 0 $((VM_COUNT - 1))); do
+    vm_name=$(jq -r ".version_managers[$vi].name" "$MANIFEST_FILE")
+    vm_label=$(jq -r ".version_managers[$vi].label // .version_managers[$vi].name" "$MANIFEST_FILE")
+    vm_check_cmd=$(jq -r ".version_managers[$vi].check_cmd // empty" "$MANIFEST_FILE")
+    vm_check_dir=$(jq -r ".version_managers[$vi].check_dir // empty" "$MANIFEST_FILE")
+    vm_brew_formula=$(jq -r ".version_managers[$vi].brew_formula // empty" "$MANIFEST_FILE")
+    vm_install_cmd=$(jq -r ".version_managers[$vi].install_cmd // empty" "$MANIFEST_FILE")
+    vm_install_cmd_fallback=$(jq -r ".version_managers[$vi].install_cmd_fallback // empty" "$MANIFEST_FILE")
+    vm_install_msg=$(jq -r ".version_managers[$vi].install_msg // empty" "$MANIFEST_FILE")
+    vm_tv_file=$(jq -r ".version_managers[$vi].tool_version_file // empty" "$MANIFEST_FILE")
+    vm_tv_pattern=$(jq -r ".version_managers[$vi].tool_version_pattern // empty" "$MANIFEST_FILE")
+    vm_managed_lang=$(jq -r ".version_managers[$vi].managed_lang // empty" "$MANIFEST_FILE")
+    vm_version_file=$(jq -r ".version_managers[$vi].version_file // empty" "$MANIFEST_FILE")
+    vm_version_cmd=$(jq -r ".version_managers[$vi].version_cmd // empty" "$MANIFEST_FILE")
+    vm_requires_check=$(jq -r ".version_managers[$vi].requires_check // empty" "$MANIFEST_FILE")
+    vm_pre_use_cmd=$(jq -r ".version_managers[$vi].pre_use_cmd // empty" "$MANIFEST_FILE")
+    vm_check_version_cmd=$(jq -r ".version_managers[$vi].check_version_cmd // empty" "$MANIFEST_FILE")
+    vm_install_version_cmd=$(jq -r ".version_managers[$vi].install_version_cmd // empty" "$MANIFEST_FILE")
+    vm_install_version_msg=$(jq -r ".version_managers[$vi].install_version_msg // \"Installed and set as global\"" "$MANIFEST_FILE")
+
+    # Expand $HOME for source-machine detection
+    vm_check_dir_expanded="${vm_check_dir/\$HOME/$HOME}"
+
+    # Detect on source machine
+    is_present=false
+    if [[ -n "$vm_check_cmd" ]] && command -v "$vm_check_cmd" &>/dev/null; then
+      is_present=true
+    elif [[ -n "$vm_check_dir" && -d "$vm_check_dir_expanded" ]]; then
+      is_present=true
+    fi
+    [[ "$is_present" == true ]] || continue
+    _vm_found=true
+
+    # Get tool version
+    tool_version=""
+    if [[ -n "$vm_check_cmd" ]]; then
+      tool_version=$("$vm_check_cmd" --version 2>/dev/null | awk '{print $2}' || echo "")
+    fi
+    if [[ -z "$tool_version" && -n "$vm_tv_file" && -n "$vm_tv_pattern" ]]; then
+      vm_tv_file_expanded="${vm_tv_file/\$HOME/$HOME}"
+      tool_version=$(grep "$vm_tv_pattern" "$vm_tv_file_expanded" 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || echo "")
+    fi
+
+    echo "  Found: $vm_label $tool_version"
+
+    # ── Emit: install version manager itself ──
+    if [[ -n "$vm_brew_formula" ]]; then
+      cat >> "$OUTPUT" << VMEOF
+if prompt_yn "Install $vm_label (brew install $vm_brew_formula)"; then
+  if command -v $vm_check_cmd &>/dev/null; then
+    mark_skipped "Already installed (\$($vm_check_cmd --version 2>/dev/null)), skipped"
   elif command -v brew &>/dev/null; then
-    brew install rbenv ruby-build
+    brew install $vm_brew_formula
     mark_installed
   else
     mark_skipped "Homebrew not found — install brew first"
@@ -606,128 +649,77 @@ if prompt_yn "Install rbenv (brew install rbenv ruby-build)"; then
 fi
 echo ""
 
-RBENVEOF
+VMEOF
+    elif [[ -n "$vm_install_cmd" ]]; then
+      # Custom install (e.g. curl for nvm)
+      if [[ -n "$tool_version" ]]; then
+        resolved_vm_cmd="${vm_install_cmd//\{tool_version\}/$tool_version}"
+      elif [[ -n "$vm_install_cmd_fallback" ]]; then
+        resolved_vm_cmd="$vm_install_cmd_fallback"
+      else
+        resolved_vm_cmd="${vm_install_cmd//\{tool_version\}/latest}"
+      fi
+      local_install_msg="${vm_install_msg:-Installed}"
 
-  if [[ -n "$rbenv_version" ]]; then
-    cat >> "$OUTPUT" << RUBYEOF
-if prompt_yn "Install Ruby $rbenv_version via rbenv (rbenv install $rbenv_version && rbenv global $rbenv_version)"; then
-  if command -v rbenv &>/dev/null; then
-    if rbenv versions 2>/dev/null | grep -q "$rbenv_version"; then
-      mark_skipped "Already installed, skipped"
-    else
-      rbenv install $rbenv_version
-      rbenv global $rbenv_version
-      mark_installed "Installed and set as global"
-    fi
-  else
-    mark_skipped "rbenv not installed — install rbenv first"
-  fi
-fi
-echo ""
-
-RUBYEOF
-  fi
-fi
-
-# nvm
-if [[ -d "$HOME/.nvm" ]]; then
-  _vm_found=true
-  node_default=$(cat "$HOME/.nvm/alias/default" 2>/dev/null || echo "")
-  nvm_version=$(grep 'NVM_VERSION' "$HOME/.nvm/nvm.sh" 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || echo "")
-  echo "  Found: nvm $nvm_version"
-
-  if [[ -n "$nvm_version" ]]; then
-    cat >> "$OUTPUT" << NVMEOF
-if prompt_yn "Install nvm via curl"; then
-  if [[ -d "\$HOME/.nvm" ]]; then
+      if [[ -n "$vm_check_dir" ]]; then
+        cat >> "$OUTPUT" << VMEOF
+if prompt_yn "Install $vm_label via curl"; then
+  if [[ -d "$vm_check_dir" ]]; then
     mark_skipped "Already installed, skipped"
   else
-    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v${nvm_version}/install.sh | bash
-    mark_installed "Installed (restart shell or source ~/.zshrc to activate)"
+    $resolved_vm_cmd
+    mark_installed "$local_install_msg"
   fi
 fi
 echo ""
 
-NVMEOF
-  else
-    cat >> "$OUTPUT" << NVMEOF
-if prompt_yn "Install nvm via curl"; then
-  if [[ -d "\$HOME/.nvm" ]]; then
-    mark_skipped "Already installed, skipped"
-  else
-    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/install.sh | bash
-    mark_installed "Installed (restart shell or source ~/.zshrc to activate)"
-  fi
-fi
-echo ""
-
-NVMEOF
-  fi
-
-  if [[ -n "$node_default" ]]; then
-    cat >> "$OUTPUT" << NODEEOF
-if prompt_yn "Install Node $node_default via nvm (default)"; then
-  if command -v nvm &>/dev/null || [[ -s "\$HOME/.nvm/nvm.sh" ]]; then
-    export NVM_DIR="\$HOME/.nvm"
-    \. "\$NVM_DIR/nvm.sh" 2>/dev/null
-    if nvm ls $node_default &>/dev/null 2>&1; then
-      mark_skipped "Already installed, skipped"
-    else
-      nvm install $node_default
-      nvm alias default $node_default
-      mark_installed "Installed and set as default"
+VMEOF
+      fi
     fi
-  else
-    mark_skipped "nvm not installed — install nvm first"
-  fi
-fi
-echo ""
 
-NODEEOF
-  fi
-fi
-
-# pyenv
-if command -v pyenv &>/dev/null; then
-  _vm_found=true
-  pyenv_version=$(cat "$HOME/.pyenv/version" 2>/dev/null || echo "")
-  pyenv_tool_version=$(pyenv --version 2>/dev/null | awk '{print $2}')
-  echo "  Found: pyenv $pyenv_tool_version"
-
-  cat >> "$OUTPUT" << PYENVEOF
-if prompt_yn "Install pyenv (brew install pyenv)"; then
-  if command -v pyenv &>/dev/null; then
-    mark_skipped "Already installed (\$(pyenv --version 2>/dev/null)), skipped"
-  elif command -v brew &>/dev/null; then
-    brew install pyenv
-    mark_installed
-  else
-    mark_skipped "Homebrew not found — install brew first"
-  fi
-fi
-echo ""
-
-PYENVEOF
-
-  if [[ -n "$pyenv_version" ]]; then
-    cat >> "$OUTPUT" << PYTHONEOF
-if prompt_yn "Install Python $pyenv_version via pyenv (pyenv install $pyenv_version && pyenv global $pyenv_version)"; then
-  if command -v pyenv &>/dev/null; then
-    if pyenv versions 2>/dev/null | grep -q "$pyenv_version"; then
-      mark_skipped "Already installed, skipped"
-    else
-      pyenv install $pyenv_version
-      pyenv global $pyenv_version
-      mark_installed "Installed and set as global"
+    # ── Emit: install managed language version ──
+    vm_version_file_expanded="${vm_version_file/\$HOME/$HOME}"
+    lang_version=""
+    if [[ -n "$vm_version_file" ]]; then
+      lang_version=$(cat "$vm_version_file_expanded" 2>/dev/null || echo "")
     fi
-  else
-    mark_skipped "pyenv not installed — install pyenv first"
-  fi
-fi
-echo ""
+    if [[ -z "$lang_version" && -n "$vm_version_cmd" ]]; then
+      lang_version=$(eval "$vm_version_cmd" 2>/dev/null || echo "")
+    fi
 
-PYTHONEOF
-  fi
+    if [[ -n "$lang_version" && -n "$vm_install_version_cmd" ]]; then
+      resolved_install="${vm_install_version_cmd//\{version\}/$lang_version}"
+      resolved_check="${vm_check_version_cmd//\{version\}/$lang_version}"
+
+      # Determine requires check for target machine
+      if [[ -n "$vm_requires_check" ]]; then
+        requires_check="$vm_requires_check"
+      elif [[ -n "$vm_check_cmd" ]]; then
+        requires_check="command -v $vm_check_cmd &>/dev/null"
+      fi
+
+      # Build the managed version block using echo to handle optional pre_use_cmd
+      {
+        echo "if prompt_yn \"Install $vm_managed_lang $lang_version via $vm_label ($resolved_install)\"; then"
+        echo "  if $requires_check; then"
+        if [[ -n "$vm_pre_use_cmd" ]]; then
+          echo "    $vm_pre_use_cmd"
+        fi
+        echo "    if $resolved_check; then"
+        echo "      mark_skipped \"Already installed, skipped\""
+        echo "    else"
+        echo "      $resolved_install"
+        echo "      mark_installed \"$vm_install_version_msg\""
+        echo "    fi"
+        echo "  else"
+        echo "    mark_skipped \"$vm_label not installed — install $vm_label first\""
+        echo "  fi"
+        echo "fi"
+        echo 'echo ""'
+        echo ""
+      } >> "$OUTPUT"
+    fi
+  done
 fi
 
 if [[ "$_vm_found" == false ]]; then

@@ -35,5 +35,45 @@
         }
       ]
     }
+  ],
+  "version_managers": [
+    {
+      "name": "rbenv",
+      "label": "rbenv",
+      "check_cmd": "rbenv",
+      "brew_formula": "rbenv ruby-build",
+      "managed_lang": "Ruby",
+      "version_file": "$HOME/.rbenv/version",
+      "version_cmd": "rbenv version-name",
+      "check_version_cmd": "rbenv versions 2>/dev/null | grep -q \"{version}\"",
+      "install_version_cmd": "rbenv install {version} && rbenv global {version}"
+    },
+    {
+      "name": "nvm",
+      "label": "nvm",
+      "check_dir": "$HOME/.nvm",
+      "install_cmd": "curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v{tool_version}/install.sh | bash",
+      "install_cmd_fallback": "curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/install.sh | bash",
+      "install_msg": "Installed (restart shell or source ~/.zshrc to activate)",
+      "tool_version_file": "$HOME/.nvm/nvm.sh",
+      "tool_version_pattern": "NVM_VERSION",
+      "managed_lang": "Node",
+      "version_file": "$HOME/.nvm/alias/default",
+      "requires_check": "command -v nvm &>/dev/null || [[ -s \"$HOME/.nvm/nvm.sh\" ]]",
+      "pre_use_cmd": "export NVM_DIR=\"$HOME/.nvm\" && \\. \"$NVM_DIR/nvm.sh\" 2>/dev/null",
+      "check_version_cmd": "nvm ls {version} &>/dev/null 2>&1",
+      "install_version_cmd": "nvm install {version} && nvm alias default {version}",
+      "install_version_msg": "Installed and set as default"
+    },
+    {
+      "name": "pyenv",
+      "label": "pyenv",
+      "check_cmd": "pyenv",
+      "brew_formula": "pyenv",
+      "managed_lang": "Python",
+      "version_file": "$HOME/.pyenv/version",
+      "check_version_cmd": "pyenv versions 2>/dev/null | grep -q \"{version}\"",
+      "install_version_cmd": "pyenv install {version} && pyenv global {version}"
+    }
   ]
 }
