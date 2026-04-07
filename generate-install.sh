@@ -31,6 +31,8 @@ echo "Generating install script: $OUTPUT"
 echo "Source machine: $HOSTNAME"
 echo ""
 
+# ─── Preamble (embedded in generated script) ────────────────────────────
+
 cat > "$OUTPUT" << 'PREAMBLE'
 #!/usr/bin/env bash
 set -uo pipefail
@@ -53,15 +55,47 @@ prompt_yn() {
   [[ "$answer" =~ ^[Yy]$ ]]
 }
 
+mark_installed() {
+  echo -e "  ${GREEN}${1:-Installed}${NC}"
+  INSTALLED=$((INSTALLED + 1))
+}
+
+mark_skipped() {
+  echo -e "  ${YELLOW}${1:-Skipped}${NC}"
+  SKIPPED=$((SKIPPED + 1))
+}
+
 append_to_zshrc() {
   local line="$1"
   if ! grep -qF "$line" ~/.zshrc 2>/dev/null; then
     echo "$line" >> ~/.zshrc
-    echo -e "  ${GREEN}Added${NC}"
-    INSTALLED=$((INSTALLED + 1))
+    mark_installed "Added"
   else
-    echo -e "  ${YELLOW}Already exists, skipped${NC}"
-    SKIPPED=$((SKIPPED + 1))
+    mark_skipped "Already exists, skipped"
+  fi
+}
+
+install_brew_formula() {
+  local formula="$1" check_path="${2:-}"
+  if [[ -n "$check_path" && -e "$check_path" ]]; then
+    mark_skipped "Already installed, skipped"
+  elif command -v brew &>/dev/null; then
+    brew install $formula
+    mark_installed
+  else
+    mark_skipped "Homebrew not found — install brew first, then: brew install $formula"
+  fi
+}
+
+install_brew_cask() {
+  local cask="$1" check_path="${2:-}"
+  if [[ -n "$check_path" && -e "$check_path" ]]; then
+    mark_skipped "Already installed, skipped"
+  elif command -v brew &>/dev/null; then
+    brew install --cask "$cask"
+    mark_installed
+  else
+    mark_skipped "Homebrew not found — install brew first, then: brew install --cask $cask"
   fi
 }
 
@@ -80,6 +114,66 @@ echo "=========================================="
 echo ""
 
 EOF
+
+# ─── Generator Helpers ──────────────────────────────────────────────────
+
+emit_section_header() {
+  local label="$1"
+  {
+    echo ""
+    echo "echo \"=== $label ===\""
+    echo 'echo ""'
+  } >> "$OUTPUT"
+}
+
+emit_brew_cask() {
+  local label="$1" cask="$2" check_path="$3"
+  cat >> "$OUTPUT" << EMITEOF
+if prompt_yn "Install $label (brew install --cask $cask)"; then
+  install_brew_cask "$cask" "$check_path"
+fi
+echo ""
+
+EMITEOF
+}
+
+emit_brew_formula() {
+  local label="$1" formula="$2" check_path="$3"
+  cat >> "$OUTPUT" << EMITEOF
+if prompt_yn "Install $label (brew install $formula)"; then
+  install_brew_formula "$formula" "$check_path"
+fi
+echo ""
+
+EMITEOF
+}
+
+emit_install_cmd() {
+  local label="$1" cmd="$2" check_path="$3"
+  cat >> "$OUTPUT" << EMITEOF
+if prompt_yn "Install $label"; then
+  if [[ -e "$check_path" ]]; then
+    mark_skipped "Already installed, skipped"
+  else
+    $cmd
+    mark_installed
+  fi
+fi
+echo ""
+
+EMITEOF
+}
+
+emit_install_hint() {
+  local label="$1" hint="$2" check_path="$3"
+  cat >> "$OUTPUT" << EMITEOF
+if [[ ! -e "$check_path" ]]; then
+  mark_skipped "$label not found — $hint"
+  echo ""
+fi
+
+EMITEOF
+}
 
 # ─── Section: MCP Servers ────────────────────────────────────────────────
 
@@ -149,8 +243,7 @@ if prompt_yn "Install MCP server: $name"; then
       printf "  Enter value for %s (Enter to skip): " "\$_key"
       read -r _val
       if [[ -z "\$_val" ]]; then
-        echo -e "  \${YELLOW}Skipped: \$_key not provided\${NC}"
-        SKIPPED=\$((SKIPPED + 1))
+        mark_skipped "Skipped: \$_key not provided"
         _skip=true
         break
       fi
@@ -159,12 +252,10 @@ if prompt_yn "Install MCP server: $name"; then
   done
   if [[ "\$_skip" != true ]]; then
     if claude mcp list 2>/dev/null | grep -q "$name"; then
-      echo -e "  \${YELLOW}Already installed, skipped\${NC}"
-      SKIPPED=\$((SKIPPED + 1))
+      mark_skipped "Already installed, skipped"
     else
       claude mcp add-json '$name' "\$_json" -s user
-      echo -e "  \${GREEN}Installed\${NC}"
-      INSTALLED=\$((INSTALLED + 1))
+      mark_installed
     fi
   fi
 fi
@@ -185,12 +276,10 @@ MCPEOF
         cat >> "$OUTPUT" << MCPEOF
 if prompt_yn "Install MCP server: $name"; then
   if claude mcp list 2>/dev/null | grep -q "$name"; then
-    echo -e "  \${YELLOW}Already installed, skipped\${NC}"
-    SKIPPED=\$((SKIPPED + 1))
+    mark_skipped "Already installed, skipped"
   else
     claude mcp add-json '$name' "\$$safe_json_var" -s user
-    echo -e "  \${GREEN}Installed\${NC}"
-    INSTALLED=\$((INSTALLED + 1))
+    mark_installed
   fi
 fi
 echo ""
@@ -283,8 +372,7 @@ if prompt_yn "Add: export $var_name [SECRET]"; then
     printf "  Enter value for $var_name (Enter to skip): "
     read -r _input_val
     if [[ -z "\$_input_val" ]]; then
-      echo -e "  \${YELLOW}Skipped\${NC}"
-      SKIPPED=\$((SKIPPED + 1))
+      mark_skipped
     else
       append_to_zshrc "export $var_name=\$_input_val"
     fi
@@ -336,11 +424,9 @@ if prompt_yn "Add function: $escaped_name()"; then
     cat >> ~/.zshrc << 'ZSHFUNC'
 $func_body
 ZSHFUNC
-    echo -e "  \${GREEN}Added\${NC}"
-    INSTALLED=\$((INSTALLED + 1))
+    mark_installed "Added"
   else
-    echo -e "  \${YELLOW}Already exists, skipped\${NC}"
-    SKIPPED=\$((SKIPPED + 1))
+    mark_skipped "Already exists, skipped"
   fi
 fi
 
@@ -374,25 +460,19 @@ echo 'echo ""' >> "$OUTPUT"
 
 echo "Scanning RTK..."
 
-{
-  echo 'echo "=== RTK (token optimizer) ==="'
-  echo 'echo ""'
-} >> "$OUTPUT"
+emit_section_header "RTK (token optimizer)"
 
 if command -v rtk &>/dev/null; then
   RTK_VERSION=$(rtk --version 2>/dev/null | awk '{print $NF}')
   cat >> "$OUTPUT" << RTKEOF
 if prompt_yn "Install rtk $RTK_VERSION (brew install rtk)"; then
   if command -v rtk &>/dev/null; then
-    echo -e "  \${YELLOW}Already installed (\$(rtk --version 2>/dev/null)), skipped\${NC}"
-    SKIPPED=\$((SKIPPED + 1))
+    mark_skipped "Already installed (\$(rtk --version 2>/dev/null)), skipped"
   elif command -v brew &>/dev/null; then
     brew install rtk
-    echo -e "  \${GREEN}Installed\${NC}"
-    INSTALLED=\$((INSTALLED + 1))
+    mark_installed
   else
-    echo -e "  \${YELLOW}Homebrew not found — install brew first, then: brew install rtk\${NC}"
-    SKIPPED=\$((SKIPPED + 1))
+    mark_skipped "Homebrew not found — install brew first, then: brew install rtk"
   fi
 fi
 echo ""
@@ -424,12 +504,10 @@ if [[ -f "$MARKETPLACES_FILE" ]] && command -v jq &>/dev/null; then
       cat >> "$OUTPUT" << MKTEOF
 if prompt_yn "Add plugin marketplace: $mkt_name (github:$source_repo)"; then
   if [[ -d "\$HOME/.claude/plugins/marketplaces/$mkt_name" ]]; then
-    echo -e "  \${YELLOW}Already added, skipped\${NC}"
-    SKIPPED=\$((SKIPPED + 1))
+    mark_skipped "Already added, skipped"
   else
     claude plugins marketplace add "github:$source_repo"
-    echo -e "  \${GREEN}Added\${NC}"
-    INSTALLED=\$((INSTALLED + 1))
+    mark_installed "Added"
   fi
 fi
 echo ""
@@ -448,12 +526,10 @@ if [[ -f "$INSTALLED_PLUGINS_FILE" ]] && command -v jq &>/dev/null; then
       cat >> "$OUTPUT" << PLUGINEOF
 if prompt_yn "Install Claude plugin: $plugin_key@$plugin_version"; then
   if claude plugins list 2>/dev/null | grep -q "$plugin_key"; then
-    echo -e "  \${YELLOW}Already installed, skipped\${NC}"
-    SKIPPED=\$((SKIPPED + 1))
+    mark_skipped "Already installed, skipped"
   else
     claude plugins install "$plugin_key" -s user
-    echo -e "  \${GREEN}Installed\${NC}"
-    INSTALLED=\$((INSTALLED + 1))
+    mark_installed
   fi
 fi
 echo ""
@@ -488,11 +564,9 @@ if prompt_yn "Merge these settings into ~/.claude/settings.json"; then
       mkdir -p "\$HOME/.claude"
       echo "\$_settings_json" | jq '.' > "\$HOME/.claude/settings.json"
     fi
-    echo -e "  \${GREEN}Merged\${NC}"
-    INSTALLED=\$((INSTALLED + 1))
+    mark_installed "Merged"
   else
-    echo -e "  \${YELLOW}jq not found, skipping settings merge\${NC}"
-    SKIPPED=\$((SKIPPED + 1))
+    mark_skipped "jq not found, skipping settings merge"
   fi
 fi
 echo ""
@@ -522,15 +596,12 @@ if command -v rbenv &>/dev/null; then
   cat >> "$OUTPUT" << RBENVEOF
 if prompt_yn "Install rbenv (brew install rbenv ruby-build)"; then
   if command -v rbenv &>/dev/null; then
-    echo -e "  \${YELLOW}Already installed (\$(rbenv --version 2>/dev/null)), skipped\${NC}"
-    SKIPPED=\$((SKIPPED + 1))
+    mark_skipped "Already installed (\$(rbenv --version 2>/dev/null)), skipped"
   elif command -v brew &>/dev/null; then
     brew install rbenv ruby-build
-    echo -e "  \${GREEN}Installed\${NC}"
-    INSTALLED=\$((INSTALLED + 1))
+    mark_installed
   else
-    echo -e "  \${YELLOW}Homebrew not found — install brew first\${NC}"
-    SKIPPED=\$((SKIPPED + 1))
+    mark_skipped "Homebrew not found — install brew first"
   fi
 fi
 echo ""
@@ -542,17 +613,14 @@ RBENVEOF
 if prompt_yn "Install Ruby $rbenv_version via rbenv (rbenv install $rbenv_version && rbenv global $rbenv_version)"; then
   if command -v rbenv &>/dev/null; then
     if rbenv versions 2>/dev/null | grep -q "$rbenv_version"; then
-      echo -e "  \${YELLOW}Already installed, skipped\${NC}"
-      SKIPPED=\$((SKIPPED + 1))
+      mark_skipped "Already installed, skipped"
     else
       rbenv install $rbenv_version
       rbenv global $rbenv_version
-      echo -e "  \${GREEN}Installed and set as global\${NC}"
-      INSTALLED=\$((INSTALLED + 1))
+      mark_installed "Installed and set as global"
     fi
   else
-    echo -e "  \${YELLOW}rbenv not installed — install rbenv first\${NC}"
-    SKIPPED=\$((SKIPPED + 1))
+    mark_skipped "rbenv not installed — install rbenv first"
   fi
 fi
 echo ""
@@ -572,12 +640,10 @@ if [[ -d "$HOME/.nvm" ]]; then
     cat >> "$OUTPUT" << NVMEOF
 if prompt_yn "Install nvm via curl"; then
   if [[ -d "\$HOME/.nvm" ]]; then
-    echo -e "  \${YELLOW}Already installed, skipped\${NC}"
-    SKIPPED=\$((SKIPPED + 1))
+    mark_skipped "Already installed, skipped"
   else
     curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v${nvm_version}/install.sh | bash
-    echo -e "  \${GREEN}Installed (restart shell or source ~/.zshrc to activate)\${NC}"
-    INSTALLED=\$((INSTALLED + 1))
+    mark_installed "Installed (restart shell or source ~/.zshrc to activate)"
   fi
 fi
 echo ""
@@ -587,12 +653,10 @@ NVMEOF
     cat >> "$OUTPUT" << NVMEOF
 if prompt_yn "Install nvm via curl"; then
   if [[ -d "\$HOME/.nvm" ]]; then
-    echo -e "  \${YELLOW}Already installed, skipped\${NC}"
-    SKIPPED=\$((SKIPPED + 1))
+    mark_skipped "Already installed, skipped"
   else
     curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/install.sh | bash
-    echo -e "  \${GREEN}Installed (restart shell or source ~/.zshrc to activate)\${NC}"
-    INSTALLED=\$((INSTALLED + 1))
+    mark_installed "Installed (restart shell or source ~/.zshrc to activate)"
   fi
 fi
 echo ""
@@ -607,17 +671,14 @@ if prompt_yn "Install Node $node_default via nvm (default)"; then
     export NVM_DIR="\$HOME/.nvm"
     \. "\$NVM_DIR/nvm.sh" 2>/dev/null
     if nvm ls $node_default &>/dev/null 2>&1; then
-      echo -e "  \${YELLOW}Already installed, skipped\${NC}"
-      SKIPPED=\$((SKIPPED + 1))
+      mark_skipped "Already installed, skipped"
     else
       nvm install $node_default
       nvm alias default $node_default
-      echo -e "  \${GREEN}Installed and set as default\${NC}"
-      INSTALLED=\$((INSTALLED + 1))
+      mark_installed "Installed and set as default"
     fi
   else
-    echo -e "  \${YELLOW}nvm not installed — install nvm first\${NC}"
-    SKIPPED=\$((SKIPPED + 1))
+    mark_skipped "nvm not installed — install nvm first"
   fi
 fi
 echo ""
@@ -636,15 +697,12 @@ if command -v pyenv &>/dev/null; then
   cat >> "$OUTPUT" << PYENVEOF
 if prompt_yn "Install pyenv (brew install pyenv)"; then
   if command -v pyenv &>/dev/null; then
-    echo -e "  \${YELLOW}Already installed (\$(pyenv --version 2>/dev/null)), skipped\${NC}"
-    SKIPPED=\$((SKIPPED + 1))
+    mark_skipped "Already installed (\$(pyenv --version 2>/dev/null)), skipped"
   elif command -v brew &>/dev/null; then
     brew install pyenv
-    echo -e "  \${GREEN}Installed\${NC}"
-    INSTALLED=\$((INSTALLED + 1))
+    mark_installed
   else
-    echo -e "  \${YELLOW}Homebrew not found — install brew first\${NC}"
-    SKIPPED=\$((SKIPPED + 1))
+    mark_skipped "Homebrew not found — install brew first"
   fi
 fi
 echo ""
@@ -656,17 +714,14 @@ PYENVEOF
 if prompt_yn "Install Python $pyenv_version via pyenv (pyenv install $pyenv_version && pyenv global $pyenv_version)"; then
   if command -v pyenv &>/dev/null; then
     if pyenv versions 2>/dev/null | grep -q "$pyenv_version"; then
-      echo -e "  \${YELLOW}Already installed, skipped\${NC}"
-      SKIPPED=\$((SKIPPED + 1))
+      mark_skipped "Already installed, skipped"
     else
       pyenv install $pyenv_version
       pyenv global $pyenv_version
-      echo -e "  \${GREEN}Installed and set as global\${NC}"
-      INSTALLED=\$((INSTALLED + 1))
+      mark_installed "Installed and set as global"
     fi
   else
-    echo -e "  \${YELLOW}pyenv not installed — install pyenv first\${NC}"
-    SKIPPED=\$((SKIPPED + 1))
+    mark_skipped "pyenv not installed — install pyenv first"
   fi
 fi
 echo ""
@@ -701,73 +756,17 @@ if [[ -f "$MANIFEST_FILE" ]] && command -v jq &>/dev/null; then
     check_path_expanded="${check_path/\$HOME/$HOME}"
 
     echo "  Found: $tool_label"
-
-    {
-      echo ""
-      echo "echo \"=== $tool_label ===\""
-      echo 'echo ""'
-    } >> "$OUTPUT"
+    emit_section_header "$tool_label"
 
     # App install step
     if [[ -n "$install_cmd" ]]; then
-      cat >> "$OUTPUT" << TOOLEOF
-if prompt_yn "Install $tool_label"; then
-  if [[ -e "$check_path" ]]; then
-    echo -e "  \${YELLOW}Already installed, skipped\${NC}"
-    SKIPPED=\$((SKIPPED + 1))
-  else
-    $install_cmd
-    echo -e "  \${GREEN}Installed\${NC}"
-    INSTALLED=\$((INSTALLED + 1))
-  fi
-fi
-echo ""
-
-TOOLEOF
+      emit_install_cmd "$tool_label" "$install_cmd" "$check_path"
     elif [[ -n "$brew_cask" ]]; then
-      cat >> "$OUTPUT" << TOOLEOF
-if prompt_yn "Install $tool_label (brew install --cask $brew_cask)"; then
-  if [[ -e "$check_path" ]]; then
-    echo -e "  \${YELLOW}Already installed, skipped\${NC}"
-    SKIPPED=\$((SKIPPED + 1))
-  elif command -v brew &>/dev/null; then
-    brew install --cask $brew_cask
-    echo -e "  \${GREEN}Installed\${NC}"
-    INSTALLED=\$((INSTALLED + 1))
-  else
-    echo -e "  \${YELLOW}Homebrew not found — install brew first, then: brew install --cask $brew_cask\${NC}"
-    SKIPPED=\$((SKIPPED + 1))
-  fi
-fi
-echo ""
-
-TOOLEOF
+      emit_brew_cask "$tool_label" "$brew_cask" "$check_path"
     elif [[ -n "$brew_formula" ]]; then
-      cat >> "$OUTPUT" << TOOLEOF
-if prompt_yn "Install $tool_label (brew install $brew_formula)"; then
-  if [[ -e "$check_path" ]]; then
-    echo -e "  \${YELLOW}Already installed, skipped\${NC}"
-    SKIPPED=\$((SKIPPED + 1))
-  elif command -v brew &>/dev/null; then
-    brew install $brew_formula
-    echo -e "  \${GREEN}Installed\${NC}"
-    INSTALLED=\$((INSTALLED + 1))
-  else
-    echo -e "  \${YELLOW}Homebrew not found — install brew first, then: brew install $brew_formula\${NC}"
-    SKIPPED=\$((SKIPPED + 1))
-  fi
-fi
-echo ""
-
-TOOLEOF
+      emit_brew_formula "$tool_label" "$brew_formula" "$check_path"
     elif [[ -n "$install_hint" ]]; then
-      cat >> "$OUTPUT" << TOOLEOF
-if [[ ! -e "$check_path" ]]; then
-  echo -e "  \${YELLOW}$tool_label not found — $install_hint\${NC}"
-  echo ""
-fi
-
-TOOLEOF
+      emit_install_hint "$tool_label" "$install_hint" "$check_path"
     fi
 
     # macOS plist prefs step (base64-embedded)
@@ -778,15 +777,11 @@ TOOLEOF
         cat >> "$OUTPUT" << PREFSEOF
 if prompt_yn "Import $tool_label preferences"; then
   if [[ -n "$check_path" && ! -e "$check_path" ]]; then
-    echo -e "  \${YELLOW}$tool_label not installed — skipping prefs\${NC}"
-    SKIPPED=\$((SKIPPED + 1))
+    mark_skipped "$tool_label not installed — skipping prefs"
   else
-    base64 -d << '$prefs_marker' | defaults import $prefs_plist - && \\
-      echo -e "  \${GREEN}Imported (restart $tool_label to apply)\${NC}" && \\
-      INSTALLED=\$((INSTALLED + 1)) || \\
-      { echo -e "  \${YELLOW}Import failed\${NC}"; SKIPPED=\$((SKIPPED + 1)); }
-$plist_b64
-$prefs_marker
+    base64 -d << '$prefs_marker' | defaults import $prefs_plist - && \
+      mark_installed "Imported (restart $tool_label to apply)" || \
+      mark_skipped "Import failed"
   fi
 fi
 echo ""
@@ -821,8 +816,7 @@ if prompt_yn "Restore $tool_label config: $rel_path"; then
   base64 -d << '$file_marker' > "$dest_path"
 $file_b64
 $file_marker
-  echo -e "  \${GREEN}Restored\${NC}"
-  INSTALLED=\$((INSTALLED + 1))
+  mark_installed "Restored"
 fi
 echo ""
 
@@ -847,12 +841,10 @@ if [[ "$WITH_BREW" == true ]]; then
       cat >> "$OUTPUT" << BREWEOF
 if prompt_yn "Install brew package: $pkg"; then
   if brew list --formula 2>/dev/null | grep -q "^${pkg}\$"; then
-    echo -e "  \${YELLOW}Already installed, skipped\${NC}"
-    SKIPPED=\$((SKIPPED + 1))
+    mark_skipped "Already installed, skipped"
   else
     brew install "$pkg"
-    echo -e "  \${GREEN}Installed\${NC}"
-    INSTALLED=\$((INSTALLED + 1))
+    mark_installed
   fi
 fi
 
@@ -867,12 +859,10 @@ BREWEOF
       cat >> "$OUTPUT" << CASKEOF
 if prompt_yn "Install brew cask: $cask"; then
   if brew list --cask 2>/dev/null | grep -q "^${cask}\$"; then
-    echo -e "  \${YELLOW}Already installed, skipped\${NC}"
-    SKIPPED=\$((SKIPPED + 1))
+    mark_skipped "Already installed, skipped"
   else
     brew install --cask "$cask"
-    echo -e "  \${GREEN}Installed\${NC}"
-    INSTALLED=\$((INSTALLED + 1))
+    mark_installed
   fi
 fi
 
