@@ -20,6 +20,20 @@
       "check_path": "/Applications/iTerm.app",
       "brew_cask": "iterm2",
       "prefs_plist": "com.googlecode.iterm2"
+    },
+    {
+      "name": "ghostty",
+      "label": "Ghostty",
+      "check_path": "/Applications/Ghostty.app",
+      "brew_cask": "ghostty",
+      "config_dirs": [
+        {
+          "note": "Ghostty configuration directory",
+          "src": "$HOME/.config/ghostty",
+          "dest": "$HOME/.config/ghostty",
+          "exclude": []
+        }
+      ]
     }
   ]
 }
