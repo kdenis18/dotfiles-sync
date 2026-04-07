@@ -40,33 +40,74 @@ set -uo pipefail
 # Auto-generated install script
 # Transfer this to another machine and run it.
 # Each item prompts before installing.
+# Use --dry-run to preview what would be installed without making changes.
+
+DRY_RUN=false
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --dry-run) DRY_RUN=true; shift ;;
+    -h|--help)
+      echo "Usage: $0 [--dry-run]"
+      echo "  --dry-run  Preview what would be installed without making changes"
+      exit 0 ;;
+    *) echo "Unknown option: $1"; exit 1 ;;
+  esac
+done
 
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
+GRAY='\033[0;90m'
 NC='\033[0m'
 INSTALLED=0
 SKIPPED=0
 
+if [[ "$DRY_RUN" == true ]]; then
+  echo -e "${BLUE}=== DRY RUN MODE — no changes will be made ===${NC}"
+  echo ""
+fi
+
 prompt_yn() {
   local msg="$1"
+  if [[ "$DRY_RUN" == true ]]; then
+    echo -e "${GRAY}[dry-run]${NC} $msg"
+    return 0
+  fi
   printf "${BLUE}%s${NC} [y/N] " "$msg"
   read -r answer
   [[ "$answer" =~ ^[Yy]$ ]]
 }
 
 mark_installed() {
+  if [[ "$DRY_RUN" == true ]]; then
+    echo -e "  ${GRAY}Would install: ${1:-item}${NC}"
+    INSTALLED=$((INSTALLED + 1))
+    return
+  fi
   echo -e "  ${GREEN}${1:-Installed}${NC}"
   INSTALLED=$((INSTALLED + 1))
 }
 
 mark_skipped() {
+  if [[ "$DRY_RUN" == true ]]; then
+    echo -e "  ${GRAY}Skip: ${1:-already present}${NC}"
+    SKIPPED=$((SKIPPED + 1))
+    return
+  fi
   echo -e "  ${YELLOW}${1:-Skipped}${NC}"
   SKIPPED=$((SKIPPED + 1))
 }
 
 append_to_zshrc() {
   local line="$1"
+  if [[ "$DRY_RUN" == true ]]; then
+    if ! grep -qF "$line" ~/.zshrc 2>/dev/null; then
+      mark_installed "Added"
+    else
+      mark_skipped "Already exists, skipped"
+    fi
+    return
+  fi
   if ! grep -qF "$line" ~/.zshrc 2>/dev/null; then
     echo "$line" >> ~/.zshrc
     mark_installed "Added"
@@ -79,6 +120,8 @@ install_brew_formula() {
   local formula="$1" check_path="${2:-}"
   if [[ -n "$check_path" && -e "$check_path" ]]; then
     mark_skipped "Already installed, skipped"
+  elif [[ "$DRY_RUN" == true ]]; then
+    mark_installed "brew install $formula"
   elif command -v brew &>/dev/null; then
     brew install $formula
     mark_installed
@@ -91,6 +134,8 @@ install_brew_cask() {
   local cask="$1" check_path="${2:-}"
   if [[ -n "$check_path" && -e "$check_path" ]]; then
     mark_skipped "Already installed, skipped"
+  elif [[ "$DRY_RUN" == true ]]; then
+    mark_installed "brew install --cask $cask"
   elif command -v brew &>/dev/null; then
     brew install --cask "$cask"
     mark_installed
@@ -872,11 +917,21 @@ fi
 cat >> "$OUTPUT" << 'FOOTER'
 echo ""
 echo "=========================================="
-echo -e "  ${GREEN}Installed: $INSTALLED${NC}"
-echo -e "  ${YELLOW}Skipped:   $SKIPPED${NC}"
+if [[ "$DRY_RUN" == true ]]; then
+  echo -e "  ${BLUE}DRY RUN SUMMARY${NC}"
+  echo -e "  ${GREEN}Would install: $INSTALLED${NC}"
+  echo -e "  ${YELLOW}Would skip:    $SKIPPED${NC}"
+  echo ""
+  echo "  Run without --dry-run to apply changes."
+else
+  echo -e "  ${GREEN}Installed: $INSTALLED${NC}"
+  echo -e "  ${YELLOW}Skipped:   $SKIPPED${NC}"
+fi
 echo "=========================================="
 echo ""
-echo "Done! You may want to run: source ~/.zshrc"
+if [[ "$DRY_RUN" != true ]]; then
+  echo "Done! You may want to run: source ~/.zshrc"
+fi
 FOOTER
 
 chmod +x "$OUTPUT"
