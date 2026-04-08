@@ -61,6 +61,7 @@ GRAY='\033[0;90m'
 NC='\033[0m'
 INSTALLED=0
 SKIPPED=0
+PRESENT=0
 
 if [[ "$DRY_RUN" == true ]]; then
   echo -e "${BLUE}=== DRY RUN MODE — no changes will be made ===${NC}"
@@ -96,6 +97,11 @@ mark_skipped() {
   fi
   echo -e "  ${YELLOW}${1:-Skipped}${NC}"
   SKIPPED=$((SKIPPED + 1))
+}
+
+mark_present() {
+  echo -e "  ${GREEN}${1:-Already installed}${NC}"
+  PRESENT=$((PRESENT + 1))
 }
 
 append_to_zshrc() {
@@ -174,7 +180,9 @@ emit_section_header() {
 emit_brew_cask() {
   local label="$1" cask="$2" check_path="$3"
   cat >> "$OUTPUT" << EMITEOF
-if prompt_yn "Install $label (brew install --cask $cask)"; then
+if [[ -n "$check_path" && -e "$check_path" ]]; then
+  mark_present "$label — already installed"
+elif prompt_yn "Install $label (brew install --cask $cask)"; then
   install_brew_cask "$cask" "$check_path"
 fi
 echo ""
@@ -185,7 +193,9 @@ EMITEOF
 emit_brew_formula() {
   local label="$1" formula="$2" check_path="$3"
   cat >> "$OUTPUT" << EMITEOF
-if prompt_yn "Install $label (brew install $formula)"; then
+if [[ -n "$check_path" && -e "$check_path" ]]; then
+  mark_present "$label — already installed"
+elif prompt_yn "Install $label (brew install $formula)"; then
   install_brew_formula "$formula" "$check_path"
 fi
 echo ""
@@ -196,13 +206,13 @@ EMITEOF
 emit_install_cmd() {
   local label="$1" cmd="$2" check_path="$3"
   cat >> "$OUTPUT" << EMITEOF
-if prompt_yn "Install $label"; then
-  if [[ -e "$check_path" ]]; then
-    mark_skipped "Already installed, skipped"
-  else
+if [[ -e "$check_path" ]]; then
+  mark_present "$label — already installed"
+elif prompt_yn "Install $label"; then
+  if [[ "\$DRY_RUN" != true ]]; then
     $cmd
-    mark_installed
   fi
+  mark_installed
 fi
 echo ""
 
@@ -280,7 +290,9 @@ $safe_json_var="\${${safe_json_var}//@@HOME@@/\$HOME}"
 MCPEOF
         fi
         cat >> "$OUTPUT" << MCPEOF
-if prompt_yn "Install MCP server: $name"; then
+if claude mcp list 2>/dev/null | grep -q "$name"; then
+  mark_present "MCP server: $name — already installed"
+elif prompt_yn "Install MCP server: $name"; then
   _json="\$$safe_json_var"
   _skip=false
   for _key in $secret_keys_list; do
@@ -296,12 +308,8 @@ if prompt_yn "Install MCP server: $name"; then
     fi
   done
   if [[ "\$_skip" != true ]]; then
-    if claude mcp list 2>/dev/null | grep -q "$name"; then
-      mark_skipped "Already installed, skipped"
-    else
-      claude mcp add-json '$name' "\$_json" -s user
-      mark_installed
-    fi
+    claude mcp add-json '$name' "\$_json" -s user
+    mark_installed
   fi
 fi
 echo ""
@@ -319,13 +327,11 @@ $safe_json_var="\${${safe_json_var}//@@HOME@@/\$HOME}"
 MCPEOF
         fi
         cat >> "$OUTPUT" << MCPEOF
-if prompt_yn "Install MCP server: $name"; then
-  if claude mcp list 2>/dev/null | grep -q "$name"; then
-    mark_skipped "Already installed, skipped"
-  else
-    claude mcp add-json '$name' "\$$safe_json_var" -s user
-    mark_installed
-  fi
+if claude mcp list 2>/dev/null | grep -q "$name"; then
+  mark_present "MCP server: $name — already installed"
+elif prompt_yn "Install MCP server: $name"; then
+  claude mcp add-json '$name' "\$$safe_json_var" -s user
+  mark_installed
 fi
 echo ""
 
@@ -392,7 +398,9 @@ if [[ -f "$ZSHRC" ]]; then
     sq_escaped=$(printf '%s' "$line" | sed "s/'/'\\\\''/g")
     display=$(printf '%s' "$line" | sed 's/"/\\"/g')
     cat >> "$OUTPUT" << ITEMEOF
-if prompt_yn "Add: $display"; then
+if grep -qF '$sq_escaped' ~/.zshrc 2>/dev/null; then
+  mark_present "Already in .zshrc: $display"
+elif prompt_yn "Add: $display"; then
   append_to_zshrc '$sq_escaped'
 fi
 
@@ -412,7 +420,9 @@ ITEMEOF
     cat >> "$OUTPUT" << SECRETEOF
 # SECRET: fill in the real value for $var_name, or enter it when prompted
 $safe_var='CHANGEME'
-if prompt_yn "Add: export $var_name [SECRET]"; then
+if grep -qF "export $var_name=" ~/.zshrc 2>/dev/null; then
+  mark_present "Already in .zshrc: export $var_name"
+elif prompt_yn "Add: export $var_name [SECRET]"; then
   if [[ "\$$safe_var" == "CHANGEME" ]]; then
     printf "  Enter value for $var_name (Enter to skip): "
     read -r _input_val
@@ -464,15 +474,13 @@ $line"
         escaped_name=$(printf '%s' "$func_name" | sed "s/'/'\\\\''/g")
         escaped_body=$(printf '%s' "$func_body" | sed "s/'/'\\\\''/g")
         cat >> "$OUTPUT" << FUNCEOF
-if prompt_yn "Add function: $escaped_name()"; then
-  if ! grep -qF '${escaped_name}()' ~/.zshrc 2>/dev/null; then
-    cat >> ~/.zshrc << 'ZSHFUNC'
+if grep -qF '${escaped_name}()' ~/.zshrc 2>/dev/null; then
+  mark_present "Already in .zshrc: ${escaped_name}()"
+elif prompt_yn "Add function: $escaped_name()"; then
+  cat >> ~/.zshrc << 'ZSHFUNC'
 $func_body
 ZSHFUNC
-    mark_installed "Added"
-  else
-    mark_skipped "Already exists, skipped"
-  fi
+  mark_installed "Added"
 fi
 
 FUNCEOF
@@ -487,7 +495,9 @@ FUNCEOF
   while IFS= read -r line; do
     escaped=$(printf '%s' "$line" | sed "s/'/'\\\\''/g")
     cat >> "$OUTPUT" << SRCEOF
-if prompt_yn "Add: $escaped"; then
+if grep -qF '$escaped' ~/.zshrc 2>/dev/null; then
+  mark_present "Already in .zshrc: $escaped"
+elif prompt_yn "Add: $escaped"; then
   append_to_zshrc '$escaped'
 fi
 
@@ -510,10 +520,10 @@ emit_section_header "RTK (token optimizer)"
 if command -v rtk &>/dev/null; then
   RTK_VERSION=$(rtk --version 2>/dev/null | awk '{print $NF}')
   cat >> "$OUTPUT" << RTKEOF
-if prompt_yn "Install rtk $RTK_VERSION (brew install rtk)"; then
-  if command -v rtk &>/dev/null; then
-    mark_skipped "Already installed (\$(rtk --version 2>/dev/null)), skipped"
-  elif command -v brew &>/dev/null; then
+if command -v rtk &>/dev/null; then
+  mark_present "rtk — already installed (\$(rtk --version 2>/dev/null))"
+elif prompt_yn "Install rtk $RTK_VERSION (brew install rtk)"; then
+  if command -v brew &>/dev/null; then
     brew install rtk
     mark_installed
   else
@@ -547,13 +557,11 @@ if [[ -f "$MARKETPLACES_FILE" ]] && command -v jq &>/dev/null; then
     while IFS= read -r mkt_name; do
       source_repo=$(jq -r ".\"$mkt_name\".source.repo" "$MARKETPLACES_FILE")
       cat >> "$OUTPUT" << MKTEOF
-if prompt_yn "Add plugin marketplace: $mkt_name (github:$source_repo)"; then
-  if [[ -d "\$HOME/.claude/plugins/marketplaces/$mkt_name" ]]; then
-    mark_skipped "Already added, skipped"
-  else
-    claude plugins marketplace add "github:$source_repo"
-    mark_installed "Added"
-  fi
+if [[ -d "\$HOME/.claude/plugins/marketplaces/$mkt_name" ]]; then
+  mark_present "Plugin marketplace: $mkt_name — already added"
+elif prompt_yn "Add plugin marketplace: $mkt_name (github:$source_repo)"; then
+  claude plugins marketplace add "github:$source_repo"
+  mark_installed "Added"
 fi
 echo ""
 
@@ -569,13 +577,11 @@ if [[ -f "$INSTALLED_PLUGINS_FILE" ]] && command -v jq &>/dev/null; then
     while IFS= read -r plugin_key; do
       plugin_version=$(jq -r ".plugins[\"$plugin_key\"][0].version" "$INSTALLED_PLUGINS_FILE")
       cat >> "$OUTPUT" << PLUGINEOF
-if prompt_yn "Install Claude plugin: $plugin_key@$plugin_version"; then
-  if claude plugins list 2>/dev/null | grep -q "$plugin_key"; then
-    mark_skipped "Already installed, skipped"
-  else
-    claude plugins install "$plugin_key" -s user
-    mark_installed
-  fi
+if claude plugins list 2>/dev/null | grep -q "$plugin_key"; then
+  mark_present "Claude plugin: $plugin_key — already installed"
+elif prompt_yn "Install Claude plugin: $plugin_key@$plugin_version"; then
+  claude plugins install "$plugin_key" -s user
+  mark_installed
 fi
 echo ""
 
@@ -621,6 +627,8 @@ SETTINGSEOF
 fi
 
 # ─── Section: Version Managers (manifest-driven) ────────────────────────────
+
+MANIFEST_FILE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/dotfiles-manifest.json"
 
 echo "Scanning version managers..."
 
@@ -682,10 +690,10 @@ if [[ -f "$MANIFEST_FILE" ]] && command -v jq &>/dev/null; then
     # ── Emit: install version manager itself ──
     if [[ -n "$vm_brew_formula" ]]; then
       cat >> "$OUTPUT" << VMEOF
-if prompt_yn "Install $vm_label (brew install $vm_brew_formula)"; then
-  if command -v $vm_check_cmd &>/dev/null; then
-    mark_skipped "Already installed (\$($vm_check_cmd --version 2>/dev/null)), skipped"
-  elif command -v brew &>/dev/null; then
+if command -v $vm_check_cmd &>/dev/null; then
+  mark_present "$vm_label — already installed (\$($vm_check_cmd --version 2>/dev/null))"
+elif prompt_yn "Install $vm_label (brew install $vm_brew_formula)"; then
+  if command -v brew &>/dev/null; then
     brew install $vm_brew_formula
     mark_installed
   else
@@ -708,13 +716,11 @@ VMEOF
 
       if [[ -n "$vm_check_dir" ]]; then
         cat >> "$OUTPUT" << VMEOF
-if prompt_yn "Install $vm_label via curl"; then
-  if [[ -d "$vm_check_dir" ]]; then
-    mark_skipped "Already installed, skipped"
-  else
-    $resolved_vm_cmd
-    mark_installed "$local_install_msg"
-  fi
+if [[ -d "$vm_check_dir" ]]; then
+  mark_present "$vm_label — already installed"
+elif prompt_yn "Install $vm_label via curl"; then
+  $resolved_vm_cmd
+  mark_installed "$local_install_msg"
 fi
 echo ""
 
@@ -745,20 +751,20 @@ VMEOF
 
       # Build the managed version block using echo to handle optional pre_use_cmd
       {
-        echo "if prompt_yn \"Install $vm_managed_lang $lang_version via $vm_label ($resolved_install)\"; then"
-        echo "  if $requires_check; then"
+        echo "if $requires_check; then"
         if [[ -n "$vm_pre_use_cmd" ]]; then
-          echo "    $vm_pre_use_cmd"
+          echo "  $vm_pre_use_cmd"
         fi
-        echo "    if $resolved_check; then"
-        echo "      mark_skipped \"Already installed, skipped\""
-        echo "    else"
+        echo "  if $resolved_check; then"
+        echo "    mark_present \"$vm_managed_lang $lang_version — already installed via $vm_label\""
+        echo "  elif prompt_yn \"Install $vm_managed_lang $lang_version via $vm_label ($resolved_install)\"; then"
+        echo '    if [[ "$DRY_RUN" != true ]]; then'
         echo "      $resolved_install"
-        echo "      mark_installed \"$vm_install_version_msg\""
         echo "    fi"
-        echo "  else"
-        echo "    mark_skipped \"$vm_label not installed — install $vm_label first\""
+        echo "    mark_installed \"$vm_install_version_msg\""
         echo "  fi"
+        echo "else"
+        echo "  mark_skipped \"$vm_label not installed — install $vm_label first to set up $vm_managed_lang $lang_version\""
         echo "fi"
         echo 'echo ""'
         echo ""
@@ -815,10 +821,14 @@ if [[ -f "$MANIFEST_FILE" ]] && command -v jq &>/dev/null; then
 if prompt_yn "Import $tool_label preferences"; then
   if [[ -n "$check_path" && ! -e "$check_path" ]]; then
     mark_skipped "$tool_label not installed — skipping prefs"
+  elif [[ "\$DRY_RUN" == true ]]; then
+    mark_installed "Would import $tool_label preferences"
   else
     base64 -d << '$prefs_marker' | defaults import $prefs_plist - && \
       mark_installed "Imported (restart $tool_label to apply)" || \
       mark_skipped "Import failed"
+$plist_b64
+$prefs_marker
   fi
 fi
 echo ""
@@ -876,13 +886,11 @@ if [[ "$WITH_BREW" == true ]]; then
   if command -v brew &>/dev/null; then
     while IFS= read -r pkg; do
       cat >> "$OUTPUT" << BREWEOF
-if prompt_yn "Install brew package: $pkg"; then
-  if brew list --formula 2>/dev/null | grep -q "^${pkg}\$"; then
-    mark_skipped "Already installed, skipped"
-  else
-    brew install "$pkg"
-    mark_installed
-  fi
+if brew list --formula 2>/dev/null | grep -q "^${pkg}\$"; then
+  mark_present "$pkg — already installed"
+elif prompt_yn "Install brew package: $pkg"; then
+  brew install "$pkg"
+  mark_installed
 fi
 
 BREWEOF
@@ -894,13 +902,11 @@ BREWEOF
     echo 'echo ""' >> "$OUTPUT"
     while IFS= read -r cask; do
       cat >> "$OUTPUT" << CASKEOF
-if prompt_yn "Install brew cask: $cask"; then
-  if brew list --cask 2>/dev/null | grep -q "^${cask}\$"; then
-    mark_skipped "Already installed, skipped"
-  else
-    brew install --cask "$cask"
-    mark_installed
-  fi
+if brew list --cask 2>/dev/null | grep -q "^${cask}\$"; then
+  mark_present "$cask — already installed"
+elif prompt_yn "Install brew cask: $cask"; then
+  brew install --cask "$cask"
+  mark_installed
 fi
 
 CASKEOF
@@ -919,13 +925,15 @@ echo ""
 echo "=========================================="
 if [[ "$DRY_RUN" == true ]]; then
   echo -e "  ${BLUE}DRY RUN SUMMARY${NC}"
-  echo -e "  ${GREEN}Would install: $INSTALLED${NC}"
-  echo -e "  ${YELLOW}Would skip:    $SKIPPED${NC}"
+  echo -e "  ${GREEN}Would install:  $INSTALLED${NC}"
+  echo -e "  ${GREEN}Already present: $PRESENT${NC}"
+  echo -e "  ${YELLOW}Would skip:     $SKIPPED${NC}"
   echo ""
   echo "  Run without --dry-run to apply changes."
 else
-  echo -e "  ${GREEN}Installed: $INSTALLED${NC}"
-  echo -e "  ${YELLOW}Skipped:   $SKIPPED${NC}"
+  echo -e "  ${GREEN}Installed:       $INSTALLED${NC}"
+  echo -e "  ${GREEN}Already present: $PRESENT${NC}"
+  echo -e "  ${YELLOW}Skipped:         $SKIPPED${NC}"
 fi
 echo "=========================================="
 echo ""
