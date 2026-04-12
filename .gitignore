@@ -1,2 +1,4 @@
 # Generated install scripts contain secrets — never commit these
 install-*.sh
+new-mac-setup/
+SECRETS_FOR_PASSWORD_MANAGER.md

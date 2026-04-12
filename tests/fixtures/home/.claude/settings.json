@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": ["Read", "Edit"],
+    "deny": []
+  },
+  "hooks": {}
+}

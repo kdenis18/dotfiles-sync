@@ -1,114 +1,141 @@
 # dotfiles-sync
 
-Generate portable install scripts to sync your dev environment between machines.
+Generate portable migration bundles to sync your dev environment between Macs.
 
-Reads your current machine's config (Claude Code MCPs, zsh aliases, plugins, tool configs, version managers, Homebrew packages) and outputs a self-contained install script you can run on another machine. Every item prompts `[y/N]` before installing.
+Scans your current machine's config (Homebrew, shell, apps, Claude Code, Cursor, Xcode, SSH, git, infrastructure, version managers, tool configs) and outputs a self-contained migration bundle you can run on another machine.
 
-## Setup
-
-```bash
-# Clone this repo
-git clone git@github.com:kdenis18/dotfiles-sync.git
-cd dotfiles-sync
-
-# Copy the generator to your PATH
-cp generate-install.sh ~/.local/bin/
-chmod +x ~/.local/bin/generate-install.sh
-```
-
-## Usage
+## Quick Start
 
 ```bash
-# Generate install script (MCPs + zsh + plugins + tools + settings)
-generate-install.sh
+# Generate migration bundle
+./generate-setup.sh
 
-# Include Homebrew packages
-generate-install.sh --with-brew
+# Output: ~/Desktop/new-mac-setup/
+#   setup-new-mac.sh              — interactive install script
+#   migration-configs/            — binary config files
+#   SECRETS_FOR_PASSWORD_MANAGER.md — save to 1Password, then delete
 
-# Custom output path
-generate-install.sh --output ~/Desktop/setup-for-work.sh
+# On the new Mac:
+cd ~/Desktop/new-mac-setup
+chmod +x setup-new-mac.sh
+./setup-new-mac.sh
+
+# Preview without making changes:
+./setup-new-mac.sh --dry-run
 ```
 
-This produces a file like `install-Kevins-Mac-mini-20260328.sh`.
+## Generator Options
 
-Transfer it to your other machine (airdrop, git, email, USB) and run:
+```
+./generate-setup.sh [OPTIONS]
+
+Output:
+  --output DIR              Output directory (default: ~/Desktop/new-mac-setup/)
+
+Section control:
+  --skip-brew               Skip Homebrew scanning
+  --skip-apps               Skip /Applications/ discovery
+  --skip-shell              Skip shell config scanning
+  --skip-claude             Skip Claude Code config
+  --skip-cursor             Skip Cursor config
+  --skip-xcode              Skip Xcode config
+  --skip-ssh                Skip SSH keys/config
+  --skip-git                Skip git config
+  --skip-infra              Skip infrastructure (AWS, ArgoCD, Opal, GH CLI, keychain)
+  --skip-repos              Skip git repo discovery
+  --skip-macos              Skip macOS preferences
+  --skip-version-managers   Skip version managers
+  --skip-tools              Skip manifest-driven tools
+  --only SECTIONS           Comma-separated sections to include (inverse of --skip)
+
+Shell options:
+  --selective-zshrc         Per-line zshrc prompts instead of full replacement
+
+Other:
+  --dry-run                 Preview what would be scanned
+```
+
+### Examples
 
 ```bash
-chmod +x install-Kevins-Mac-mini-20260328.sh
-./install-Kevins-Mac-mini-20260328.sh
+# Only generate Claude and shell config (equivalent to old generate-install.sh)
+./generate-setup.sh --only claude,shell,version-managers,tools --selective-zshrc
 
-# Preview what would be installed without making changes
-./install-Kevins-Mac-mini-20260328.sh --dry-run
+# Skip slow app scanning
+./generate-setup.sh --skip-apps
+
+# Preview what would be scanned
+./generate-setup.sh --dry-run
 ```
 
-## What it captures
+## What It Captures
 
-| Section | Source | Prompted action |
-|---------|--------|-----------------|
-| MCP Servers | `claude mcp list` + `~/.claude.json` | `claude mcp add-json` per server |
-| Cloud MCPs | `claude mcp list` (claude.ai prefix) | Info only (account-level) |
-| Zsh Config | `~/.zshrc` aliases, exports, PATH, functions | Idempotent append to `~/.zshrc` |
-| RTK | `rtk --version` | `brew install rtk` |
-| Plugins | `~/.claude/plugins/known_marketplaces.json` | Marketplace + plugin install |
-| Settings | `~/.claude/settings.json` | `jq` merge into target settings |
-| Version Managers | `dotfiles-manifest.json` (rbenv, nvm, pyenv) | Install manager + language version |
-| Tool Configs | `dotfiles-manifest.json` (oh-my-zsh, iTerm2, Ghostty) | Install app + restore configs/prefs |
-| Homebrew | `brew list` (with `--with-brew`) | `brew install` per package |
+| Section | Source | Install Action |
+|---------|--------|----------------|
+| Homebrew | `brew list`, `brew tap` | Install taps, formulae, casks |
+| Shell Config | ~/.zshrc, ~/.zprofile, ~/.zshenv | Full replacement or per-line append |
+| Applications | /Applications/ scan | `brew install --cask` or `mas install` |
+| Claude Code | MCPs, plugins, settings, CLAUDE.md, hooks | `claude mcp add-json`, file writes |
+| Cursor | Settings, keybindings, MCP, rules | File writes |
+| Xcode | Themes, snippets, keybindings | Copy to UserData |
+| Git | ~/.gitconfig, ~/.gitignore_global | File writes |
+| SSH | Keys, config | Paste from password manager |
+| Infrastructure | AWS, ArgoCD, Opal, GH CLI, keychain | File writes, keychain entries |
+| Git Repos | ~/Hinge/*, ~/workspace/* | `git clone` |
+| Version Managers | dotfiles-manifest.json (rbenv, nvm, pyenv) | Install manager + language version |
+| Tool Configs | dotfiles-manifest.json (oh-my-zsh, iTerm2, Ghostty) | Install app + restore configs |
+| macOS Prefs | Finder settings | `defaults write` |
 
 ## Manifest
 
-`dotfiles-manifest.json` drives tool and version manager discovery. Add new entries to extend what the generator captures without editing bash.
+`dotfiles-manifest.json` drives tool and version manager discovery. See the spec for field documentation.
 
-### Tools
+## Architecture
 
-```json
-{
-  "name": "ghostty",
-  "label": "Ghostty",
-  "check_path": "/Applications/Ghostty.app",
-  "brew_cask": "ghostty",
-  "config_dirs": [
-    { "src": "$HOME/.config/ghostty", "dest": "$HOME/.config/ghostty", "exclude": [] }
-  ]
-}
+```
+generate-setup.sh          — orchestrator (arg parsing, calls modules)
+lib/
+  common.sh                — shared helpers, secret handling, emit functions
+  emit-preamble.sh         — install script header
+  emit-secrets.sh          — SECRETS_FOR_PASSWORD_MANAGER.md
+  emit-footer.sh           — install script summary
+  scan-*.sh                — one module per section
+tests/
+  run-tests.sh             — test runner
+  test-shellcheck.sh       — lint all bash
+  test-generator-syntax.sh — bash -n on generated output
+  test-golden.sh           — regression tests
+  test-no-secrets.sh       — secret leak detection
 ```
 
-Supported fields: `check_path`, `install_cmd`, `brew_cask`, `brew_formula`, `install_hint`, `prefs_plist`, `config_dirs`.
+## Testing
 
-### Version Managers
+```bash
+# Run all tests
+./tests/run-tests.sh
 
-```json
-{
-  "name": "pyenv",
-  "label": "pyenv",
-  "check_cmd": "pyenv",
-  "brew_formula": "pyenv",
-  "managed_lang": "Python",
-  "version_file": "$HOME/.pyenv/version",
-  "check_version_cmd": "pyenv versions 2>/dev/null | grep -q \"{version}\"",
-  "install_version_cmd": "pyenv install {version} && pyenv global {version}"
-}
+# Update golden files after intentional changes
+./tests/run-tests.sh --update-golden
 ```
 
-Supported fields: `check_cmd`, `check_dir`, `brew_formula`, `install_cmd` (with `{tool_version}` placeholder), `install_cmd_fallback`, `install_msg`, `tool_version_file`, `tool_version_pattern`, `managed_lang`, `version_file`, `version_cmd`, `requires_check`, `pre_use_cmd`, `check_version_cmd` (with `{version}`), `install_version_cmd` (with `{version}`), `install_version_msg`.
+Requires: `shellcheck` (`brew install shellcheck`)
 
 ## Requirements
 
 - macOS with zsh
-- `claude` CLI (for MCP operations)
-- `jq` (for JSON parsing -- `brew install jq`)
-- `brew` (optional, for Homebrew package sync)
+- `jq` (`brew install jq`)
+- `shellcheck` (for tests only)
+- `brew` (optional, for Homebrew sync)
+- `claude` CLI (for Claude Code operations)
 
-## How it works
+## Migration from generate-install.sh
 
-The generator reads your current config and writes a bash script where each item is wrapped in a `[y/N]` prompt with an idempotency check (won't re-add things that already exist). Safe to re-run.
+`generate-install.sh` has been merged into `generate-setup.sh`. Equivalent usage:
 
-Generated scripts support `--dry-run` to preview all items without making changes.
+```bash
+# Old:
+generate-install.sh --with-brew
 
-## Workflow
-
-1. Set up something new on machine A (MCP, alias, brew package, tool)
-2. Run `generate-install.sh` on machine A
-3. Commit the output to this repo (or transfer however you like)
-4. On machine B: pull and run the install script
-5. Pick what you want installed
+# New:
+./generate-setup.sh --only brew,claude,shell,version-managers,tools --selective-zshrc
+```
