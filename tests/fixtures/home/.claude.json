@@ -1,0 +1,18 @@
+{
+  "mcpServers": {
+    "test-mcp": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "test-mcp-server"],
+      "env": {
+        "TEST_API_KEY": "sk-test-mcp-secret-67890"
+      }
+    },
+    "local-mcp": {
+      "type": "stdio",
+      "command": "/Users/testuser/.local/bin/mcp-server",
+      "args": [],
+      "env": {}
+    }
+  }
+}
