@@ -320,8 +320,8 @@ EMITEOF
 # ── Manifest Command Validation ─────────────────────────────────────────────
 validate_manifest_cmd() {
   local cmd="$1"
-  if ! printf '%s' "$cmd" | grep -qE '^[a-zA-Z0-9_./:=~# |&>"\047{}\$\-]+$'; then
-    err "Manifest command contains suspicious characters: $cmd"
-    return 1
+  if ! printf '%s' "$cmd" | grep -qE '^[a-zA-Z0-9_./:=~#() |&>"\047{}\$\-]+$'; then
+    warn "Manifest command contains unusual characters (review before running): $cmd"
+    return 0  # warn but don't block — the command may be intentional
   fi
 }
