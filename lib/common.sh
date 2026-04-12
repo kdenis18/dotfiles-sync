@@ -24,19 +24,21 @@ SECRET_PATTERN='TOKEN|KEY|SECRET|PASSWORD|PASS|API_KEY|CREDENTIAL|AUTH'
 
 # ── Section Flags ───────────────────────────────────────────────────────────
 # Populated by parse_args. ONLY_SECTIONS is an array (empty = all enabled).
-# SKIP_SECTIONS is an associative array of section_name -> true.
+# SKIP_SECTIONS tracks skipped sections as a space-delimited string (bash 3.2 compatible).
 declare -a ONLY_SECTIONS=()
-declare -A SKIP_SECTIONS=()
+SKIP_SECTIONS=""
 
 VALID_SECTIONS="brew apps shell claude cursor xcode git ssh infra repos macos version-managers tools"
 
 validate_section_name() {
   local name="$1"
-  if ! echo "$VALID_SECTIONS" | grep -qw "$name"; then
-    err "Unknown section: $name"
-    err "Valid sections: $VALID_SECTIONS"
-    exit 1
-  fi
+  local valid
+  for valid in $VALID_SECTIONS; do
+    [[ "$valid" == "$name" ]] && return 0
+  done
+  err "Unknown section: $name"
+  err "Valid sections: $VALID_SECTIONS"
+  exit 1
 }
 
 section_enabled() {
@@ -48,7 +50,7 @@ section_enabled() {
     done
     return 1
   fi
-  [[ "${SKIP_SECTIONS[$name]:-}" != "true" ]]
+  [[ " $SKIP_SECTIONS " != *" $name "* ]]
 }
 
 # ── Argument Parsing ────────────────────────────────────────────────────────
@@ -65,15 +67,15 @@ parse_args() {
       --skip-xcode|--skip-git|--skip-ssh|--skip-infra|--skip-repos|\
       --skip-macos|--skip-version-managers|--skip-tools)
         local section_name="${1#--skip-}"
+        validate_section_name "$section_name"
         if [[ ${#ONLY_SECTIONS[@]} -gt 0 ]]; then
           err "--only and --skip-* are mutually exclusive"
           exit 1
         fi
-        validate_section_name "$section_name"
-        SKIP_SECTIONS["$section_name"]=true
+        SKIP_SECTIONS="$SKIP_SECTIONS $section_name"
         shift ;;
       --only)
-        if [[ ${#SKIP_SECTIONS[@]} -gt 0 ]]; then
+        if [[ -n "$SKIP_SECTIONS" ]]; then
           err "--only and --skip-* are mutually exclusive"
           exit 1
         fi
@@ -124,7 +126,7 @@ parse_args() {
   done
 
   # Also reject --skip after --only was already set (order-independent)
-  if [[ ${#ONLY_SECTIONS[@]} -gt 0 && ${#SKIP_SECTIONS[@]} -gt 0 ]]; then
+  if [[ ${#ONLY_SECTIONS[@]} -gt 0 && -n "$SKIP_SECTIONS" ]]; then
     err "--only and --skip-* are mutually exclusive"
     exit 1
   fi
@@ -219,7 +221,7 @@ redact_shell_file() {
 redact_json_secrets() {
   local json="$1"
   echo "$json" | jq -c 'if .env then .env |= with_entries(
-    if (.key | test("TOKEN|KEY|SECRET|PASSWORD|PASS|API"; "i"))
+    if (.key | test("TOKEN|KEY|SECRET|PASSWORD|PASS|API_KEY|CREDENTIAL|AUTH"; "i"))
     then .value = "CHANGEME" else . end
   ) else . end'
 }
@@ -318,7 +320,7 @@ EMITEOF
 # ── Manifest Command Validation ─────────────────────────────────────────────
 validate_manifest_cmd() {
   local cmd="$1"
-  if ! printf '%s' "$cmd" | grep -qE '^[a-zA-Z0-9_./ |&>"\047{}\$\-]+$'; then
+  if ! printf '%s' "$cmd" | grep -qE '^[a-zA-Z0-9_./:=~# |&>"\047{}\$\-]+$'; then
     err "Manifest command contains suspicious characters: $cmd"
     return 1
   fi
