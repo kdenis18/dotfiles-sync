@@ -11,10 +11,10 @@ run_test() {
   printf "  %-40s " "$name"
   if bash "$script" "$@" > /dev/null 2>&1; then
     echo "PASS"
-    ((PASSED++))
+    PASSED=$((PASSED + 1))
   else
     echo "FAIL"
-    ((FAILURES++))
+    FAILURES=$((FAILURES + 1))
     # Re-run with output for debugging
     echo "    --- output ---"
     bash "$script" "$@" 2>&1 | sed 's/^/    /'

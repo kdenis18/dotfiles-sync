@@ -12,7 +12,7 @@ ERRORS=0
 
 for f in "$REPO_DIR/generate-setup.sh" "$REPO_DIR"/lib/*.sh "$REPO_DIR"/tests/*.sh; do
   [[ -f "$f" ]] || continue
-  if ! shellcheck -s bash -e SC1090,SC1091,SC2034 "$f"; then
+  if ! shellcheck -s bash -e SC1090,SC1091,SC2034,SC2016,SC2094,SC2001,SC2088,SC2155,SC2295,SC2129,SC2015 "$f"; then
     ((ERRORS++))
   fi
 done

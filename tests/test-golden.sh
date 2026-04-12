@@ -7,7 +7,10 @@ GOLDEN_DIR="$REPO_DIR/tests/fixtures/golden"
 GOLDEN_FILE="$GOLDEN_DIR/setup-new-mac.golden.sh"
 TEST_OUTPUT=$(mktemp -d)
 
-trap 'rm -rf "$TEST_OUTPUT"' EXIT
+trap 'rm -rf "$TEST_OUTPUT"; rm -f "$FIXTURE_HOME/Desktop/SECRETS_FOR_PASSWORD_MANAGER.md"; rmdir "$FIXTURE_HOME/Desktop" 2>/dev/null || true' EXIT
+
+# Ensure fixture home has a Desktop dir for secrets file
+mkdir -p "$FIXTURE_HOME/Desktop"
 
 # Run generator with fixtures
 HOME="$FIXTURE_HOME" bash "$REPO_DIR/generate-setup.sh" \

@@ -207,7 +207,7 @@ redact_shell_file() {
   done < "$file"
 
   # Redact each secret var's value to CHANGEME
-  for varname in "${secret_vars[@]}"; do
+  for varname in ${secret_vars[@]+"${secret_vars[@]}"}; do
     content=$(printf '%s' "$content" | sed -E "s|(export ${varname}=)\"[^\"]*\"|\1\"CHANGEME\"|g")
     content=$(printf '%s' "$content" | sed -E "s|(export ${varname}=)([^\"][^ ]*)([ \t]*)$|\1CHANGEME\3|g")
   done
