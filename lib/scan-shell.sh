@@ -214,7 +214,7 @@ echo ""
 ITEMEOF
     fi
 
-    ((zsh_items++))
+    zsh_items=$((zsh_items + 1))
   }
 
   # ── Parse and emit aliases ──
@@ -268,7 +268,7 @@ fi
 echo ""
 
 FUNCEOF
-        ((zsh_items++))
+        zsh_items=$((zsh_items + 1))
         func_body=""
         func_name=""
       fi
