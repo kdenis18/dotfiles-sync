@@ -64,7 +64,7 @@ Numbers=409203825
 
   # ── Phase 1: Brew cask lookups with progress ──
   for app_name in "${APP_LIST[@]}"; do
-    ((app_idx++))
+    app_idx=$((app_idx + 1))
     printf "\r  Scanning apps... [%d/%d] %-40s" "$app_idx" "$app_count" "$app_name"
 
     # Check cask overrides first
@@ -123,7 +123,7 @@ Numbers=409203825
       if command -v mas &>/dev/null; then
         (
           local mas_result
-          mas_result=$(mas search "$app_name" 2>/dev/null | head -5 | grep -i "$app_name" | head -1)
+          mas_result=$(mas search "$app_name" 2>/dev/null | head -5 | grep -i "$app_name" | head -1 || true)
           if [[ -n "$mas_result" ]]; then
             local mas_id
             mas_id=$(echo "$mas_result" | awk '{print $1}')

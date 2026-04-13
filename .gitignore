@@ -2,3 +2,9 @@
 install-*.sh
 new-mac-setup/
 SECRETS_FOR_PASSWORD_MANAGER.md
+
+# Test fixture artifacts (created when tests run with HOME pointed at fixtures)
+tests/fixtures/home/.npm/
+tests/fixtures/home/Library/
+tests/fixtures/home/.claude/backups/
+tests/fixtures/home/Desktop/

@@ -24,7 +24,15 @@ scan_cursor() {
     cursor_mcp_content=$(cat "$HOME/.cursor/mcp.json")
 
     # Detect and redact secrets using python3
-    for secret_key in $(echo "$cursor_mcp_content" | python3 -c "
+    while IFS= read -r secret_key; do
+      [[ -z "$secret_key" ]] && continue
+      local key_path="${secret_key%%|||*}"
+      local key_value="${secret_key##*|||}"
+      local key_name
+      key_name=$(echo "$key_path" | sed 's/.*\.//')
+      add_secret "Cursor MCP: $key_name ($key_path)" "~/.cursor/mcp.json" "$key_value"
+      cursor_mcp_content=$(printf '%s' "$cursor_mcp_content" | sed "s|$key_value|CHANGEME|g")
+    done < <(echo "$cursor_mcp_content" | python3 -c "
 import json, sys
 def find_secrets(obj, path=''):
     if isinstance(obj, dict):
@@ -40,14 +48,7 @@ try:
     data = json.load(sys.stdin)
     find_secrets(data)
 except: pass
-" 2>/dev/null); do
-      local key_path="${secret_key%%|||*}"
-      local key_value="${secret_key##*|||}"
-      local key_name
-      key_name=$(echo "$key_path" | sed 's/.*\.//')
-      add_secret "Cursor MCP: $key_name ($key_path)" "~/.cursor/mcp.json" "$key_value"
-      cursor_mcp_content=$(printf '%s' "$cursor_mcp_content" | sed "s|$key_value|CHANGEME|g")
-    done
+" 2>/dev/null)
     cursor_mcp_content=$(rewrite_home_paths "$cursor_mcp_content")
     cursor_mcp="$cursor_mcp_content"
     info "Found ~/.cursor/mcp.json"

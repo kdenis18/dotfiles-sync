@@ -3,7 +3,10 @@
     "test-mcp": {
       "type": "stdio",
       "command": "npx",
-      "args": ["-y", "test-mcp-server"],
+      "args": [
+        "-y",
+        "test-mcp-server"
+      ],
       "env": {
         "TEST_API_KEY": "sk-test-mcp-secret-67890"
       }
@@ -14,5 +17,10 @@
       "args": [],
       "env": {}
     }
-  }
+  },
+  "firstStartTime": "2026-04-13T04:15:29.327Z",
+  "opusProMigrationComplete": true,
+  "sonnet1m45MigrationComplete": true,
+  "migrationVersion": 11,
+  "userID": "df3503c42c093679a1d94e2e6468068b7eb4ee72119ac4393e296c4ddee31d8b"
 }

@@ -164,7 +164,7 @@ SECRETEOF
       # Item with diff support (aliases, exports with known name)
       cat >> "$SCRIPT_FILE" << DIFFEOF
 _new_line='$sq_escaped'
-_existing=\$(grep "^${match_pattern}" "\$HOME/.zshrc" 2>/dev/null | head -1)
+_existing=\$(grep "^${match_pattern}" "\$HOME/.zshrc" 2>/dev/null | head -1 || true)
 if [[ -n "\$_existing" ]]; then
   if [[ "\$_existing" == "\$_new_line" ]]; then
     skip "Already in .zshrc: $display"
@@ -330,9 +330,15 @@ INJECT_HEADER
     cat >> "$SCRIPT_FILE" << INJECT_BLOCK
 
 echo -e "\${CYAN}$varname\${NC}"
-read -rsp "  Value (hidden): " _val
-echo
-if [[ -n "\$_val" ]]; then
+if [[ "\$DRY_RUN" == true ]]; then
+  dry "Would prompt for $varname"
+elif [[ "\$ACCEPT_ALL" == true ]]; then
+  skip "$varname (auto-yes cannot fill secrets — enter manually later)"
+else
+  read -rsp "  Value (hidden): " _val
+  echo
+fi
+if [[ "\$DRY_RUN" != true && "\$ACCEPT_ALL" != true && -n "\${_val:-}" ]]; then
   for _f in "\$HOME/.zshrc" "\$HOME/.zprofile"; do
     if [[ -f "\$_f" ]]; then
       _content=\$(cat "\$_f")

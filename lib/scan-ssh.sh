@@ -26,7 +26,7 @@ scan_ssh() {
         [[ -f "${key}.pub" ]] && pubkey=$(cat "${key}.pub")
         add_secret "SSH Key: $local_name" "~/.ssh/$local_name" "$privkey" "Private key — save entire contents including BEGIN/END lines"
         if [[ -n "$pubkey" ]]; then
-          ((SECRET_REF++))
+          SECRET_REF=$((SECRET_REF + 1))
           {
             echo "### Ref $SECRET_REF: SSH Public Key: ${local_name}.pub"
             echo "- **Location**: \`~/.ssh/${local_name}.pub\`"

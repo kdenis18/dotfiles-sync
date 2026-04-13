@@ -18,12 +18,22 @@ set -euo pipefail
 ###############################################################################
 
 DRY_RUN=false
+ACCEPT_ALL=false
+ACCEPT_LIST=""
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dry-run) DRY_RUN=true; shift ;;
+    --yes|-y) ACCEPT_ALL=true; shift ;;
+    --accept)
+      ACCEPT_LIST="$2"; shift 2 ;;
     -h|--help)
-      echo "Usage: $0 [--dry-run]"
-      echo "  --dry-run  Preview what would be installed without making changes"
+      echo "Usage: $0 [--dry-run] [--yes] [--accept ITEMS]"
+      echo ""
+      echo "  --dry-run        Preview what would be installed without making changes"
+      echo "  --yes, -y        Auto-accept all prompts"
+      echo "  --accept ITEMS   Auto-accept items matching comma-separated list"
+      echo "                   Example: --accept 'Slack,Chrome,1Password'"
       exit 0 ;;
     *) echo "Unknown option: $1"; exit 1 ;;
   esac
@@ -44,16 +54,33 @@ CYAN='\033[0;36m'; BOLD='\033[1m'; GRAY='\033[0;90m'; NC='\033[0m'
 INSTALLED=0; SKIPPED=0; FAILED=0
 
 banner()  { echo -e "\n${CYAN}${BOLD}=== $1 ===${NC}\n"; }
-success() { echo -e "  ${GREEN}+${NC} $1"; ((INSTALLED++)); }
-skip()    { echo -e "  ${YELLOW}>${NC} $1"; ((SKIPPED++)); }
-fail()    { echo -e "  ${RED}!${NC} $1"; ((FAILED++)); }
-dry()     { echo -e "  ${GRAY}[dry-run]${NC} $1"; ((INSTALLED++)); }
+success() { echo -e "  ${GREEN}+${NC} $1"; INSTALLED=$((INSTALLED + 1)); }
+skip()    { echo -e "  ${YELLOW}>${NC} $1"; SKIPPED=$((SKIPPED + 1)); }
+fail()    { echo -e "  ${RED}!${NC} $1"; FAILED=$((FAILED + 1)); }
+dry()     { echo -e "  ${GRAY}[dry-run]${NC} $1"; INSTALLED=$((INSTALLED + 1)); }
 
 prompt_yn() {
   local msg="$1"
   if [[ "$DRY_RUN" == true ]]; then
     echo -e "${GRAY}[dry-run]${NC} $msg"
     return 0
+  fi
+  if [[ "$ACCEPT_ALL" == true ]]; then
+    echo -e "  ${GREEN}[auto-yes]${NC} $msg"
+    return 0
+  fi
+  if [[ -n "$ACCEPT_LIST" ]]; then
+    local _msg_lower _item_lower
+    _msg_lower=$(echo "$msg" | tr '[:upper:]' '[:lower:]')
+    IFS=',' read -ra _accept_items <<< "$ACCEPT_LIST"
+    for _accept_item in "${_accept_items[@]}"; do
+      _accept_item=$(echo "$_accept_item" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+      _item_lower=$(echo "$_accept_item" | tr '[:upper:]' '[:lower:]')
+      if [[ -n "$_item_lower" && "$_msg_lower" == *"$_item_lower"* ]]; then
+        echo -e "  ${GREEN}[auto-yes]${NC} $msg"
+        return 0
+      fi
+    done
   fi
   read -rp "  Install $msg? [y/N] " ans
   [[ "$ans" =~ ^[Yy]$ ]]
@@ -155,9 +182,15 @@ echo -e "${BOLD}Press Enter to skip any item.${NC}"
 echo ""
 
 echo -e "${CYAN}API_KEY${NC}"
-read -rsp "  Value (hidden): " _val
-echo
-if [[ -n "$_val" ]]; then
+if [[ "$DRY_RUN" == true ]]; then
+  dry "Would prompt for API_KEY"
+elif [[ "$ACCEPT_ALL" == true ]]; then
+  skip "API_KEY (auto-yes cannot fill secrets — enter manually later)"
+else
+  read -rsp "  Value (hidden): " _val
+  echo
+fi
+if [[ "$DRY_RUN" != true && "$ACCEPT_ALL" != true && -n "${_val:-}" ]]; then
   for _f in "$HOME/.zshrc" "$HOME/.zprofile"; do
     if [[ -f "$_f" ]]; then
       _content=$(cat "$_f")

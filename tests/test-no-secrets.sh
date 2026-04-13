@@ -25,7 +25,7 @@ LEAKED=0
 for secret in "sk-test-fixture-secret-12345" "sk-test-mcp-secret-67890"; do
   if grep -q "$secret" "$SCRIPT"; then
     echo "LEAKED: $secret found in setup-new-mac.sh"
-    ((LEAKED++))
+    LEAKED=$((LEAKED + 1))
   fi
 done
 
@@ -34,7 +34,7 @@ if [[ -d "$TEST_OUTPUT/migration-configs" ]]; then
   for secret in "sk-test-fixture-secret-12345" "sk-test-mcp-secret-67890"; do
     if grep -rq "$secret" "$TEST_OUTPUT/migration-configs/"; then
       echo "LEAKED: $secret found in migration-configs/"
-      ((LEAKED++))
+      LEAKED=$((LEAKED + 1))
     fi
   done
 fi
@@ -43,7 +43,7 @@ fi
 for prefix in "sk-test-" "ghp_" "gho_" "AKIA" "-----BEGIN.*PRIVATE KEY"; do
   if grep -qE "$prefix" "$SCRIPT"; then
     echo "SUSPICIOUS: pattern '$prefix' found in setup-new-mac.sh"
-    ((LEAKED++))
+    LEAKED=$((LEAKED + 1))
   fi
 done
 
@@ -53,7 +53,7 @@ if [[ -f "$SECRETS_FILE" ]]; then
   for secret in "sk-test-fixture-secret-12345" "sk-test-mcp-secret-67890"; do
     if ! grep -q "$secret" "$SECRETS_FILE"; then
       echo "MISSING: $secret not found in SECRETS_FOR_PASSWORD_MANAGER.md"
-      ((LEAKED++))
+      LEAKED=$((LEAKED + 1))
     fi
   done
 fi

@@ -160,7 +160,7 @@ _cleanup() {
 # ── Secret Handling ─────────────────────────────────────────────────────────
 add_secret() {
   local name="$1" location="$2" value="$3" note="${4:-}"
-  ((SECRET_REF++))
+  SECRET_REF=$((SECRET_REF + 1))
   {
     echo "### Ref $SECRET_REF: $name"
     echo "- **Location**: \`$location\`"
