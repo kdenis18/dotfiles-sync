@@ -122,7 +122,7 @@ _emit_selective_zshrc() {
     local label="$1" line="$2" match_pattern="$3"
     local sq_escaped display
     sq_escaped=$(printf '%s' "$line" | sed "s/'/'\\\\''/g")
-    display=$(printf '%s' "$line" | sed 's/"/\\"/g')
+    display=$(printf '%s' "$line" | sed -e 's/\$/\\$/g' -e 's/"/\\"/g')
 
     # Check if it's a secret export
     local is_secret=false
@@ -240,18 +240,33 @@ ITEMEOF
   local in_func=false func_name="" func_body=""
   while IFS= read -r line; do
     if [[ "$in_func" == false && "$line" =~ ^([a-zA-Z_][a-zA-Z0-9_]*)\(\)\ *\{ ]]; then
-      in_func=true
       func_name="${BASH_REMATCH[1]}"
       func_body="$line"
+      if [[ "$line" =~ \}[[:space:]]*$ ]]; then
+        # One-liner function — body is complete, fall through to emit
+        :
+      else
+        in_func=true
+        continue
+      fi
     elif [[ "$in_func" == true ]]; then
       func_body="$func_body
 $line"
       if [[ "$line" == "}" ]]; then
         in_func=false
-        local escaped_name escaped_body
-        escaped_name=$(printf '%s' "$func_name" | sed "s/'/'\\\\''/g")
-        escaped_body=$(printf '%s' "$func_body" | sed "s/'/'\\\\''/g")
-        cat >> "$SCRIPT_FILE" << FUNCEOF
+        # Multi-line function complete, fall through to emit
+      else
+        continue
+      fi
+    else
+      continue
+    fi
+
+    # Emit the function block (reached from either one-liner or multi-line)
+    local escaped_name escaped_body
+    escaped_name=$(printf '%s' "$func_name" | sed "s/'/'\\\\''/g")
+    escaped_body=$(printf '%s' "$func_body" | sed "s/'/'\\\\''/g")
+    cat >> "$SCRIPT_FILE" << FUNCEOF
 _existing_func=\$(grep -c "${escaped_name}()" "\$HOME/.zshrc" 2>/dev/null || echo "0")
 if [[ "\$_existing_func" -gt 0 ]]; then
   skip "Already in .zshrc: ${escaped_name}()"
@@ -268,11 +283,9 @@ fi
 echo ""
 
 FUNCEOF
-        zsh_items=$((zsh_items + 1))
-        func_body=""
-        func_name=""
-      fi
-    fi
+    zsh_items=$((zsh_items + 1))
+    func_body=""
+    func_name=""
   done < "$zshrc"
 
   # ── Parse and emit source lines ──
