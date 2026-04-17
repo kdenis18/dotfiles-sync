@@ -31,7 +31,9 @@ fi
 echo "=========================================="
 echo ""
 if [[ "$DRY_RUN" != true ]]; then
-  echo -e "${BOLD}Done! Restart your terminal to pick up shell changes.${NC}"
+  echo -e "${BOLD}Done!${NC}"
+  echo ""
+  echo -e "${YELLOW}Restart your terminal (Ghostty, iTerm2, Terminal) to pick up shell and PATH changes.${NC}"
 fi
 FOOTER
 }
