@@ -20,6 +20,33 @@ scan_claude() {
     return
   fi
 
+  # ── Claude CLI ──
+  cat >> "$SCRIPT_FILE" << 'CLAUDE_CLI_BLOCK'
+
+# ── Claude CLI ──
+if command -v claude &>/dev/null; then
+  skip "Claude CLI (already installed)"
+elif prompt_yn "Claude CLI (npm install -g @anthropic-ai/claude-code)"; then
+  if [[ "$DRY_RUN" == true ]]; then
+    dry "Would install Claude CLI"
+  elif command -v npm &>/dev/null; then
+    npm install -g @anthropic-ai/claude-code && success "Claude CLI" || fail "Claude CLI"
+  else
+    fail "npm not found — install Node.js first, then: npm install -g @anthropic-ai/claude-code"
+  fi
+else
+  skip "Claude CLI"
+fi
+
+# Ensure ~/.local/bin is in PATH (claude installs there)
+if ! grep -qF '$HOME/.local/bin' "$HOME/.zshrc" 2>/dev/null; then
+  echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.zshrc"
+  success "Added ~/.local/bin to PATH in ~/.zshrc"
+fi
+echo ""
+
+CLAUDE_CLI_BLOCK
+
   # ── MCPs ──
   emit_section_header "Claude Code MCP Servers"
 
