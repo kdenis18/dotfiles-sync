@@ -49,6 +49,22 @@ scan_shell() {
 # Shell Configuration
 ###############################################################################
 banner "Shell Configuration"
+
+# ── Oh My Zsh (must be before .zshrc write) ──
+if [[ -d "$HOME/.oh-my-zsh" ]]; then
+  skip "Oh My Zsh (already installed)"
+elif prompt_yn "Oh My Zsh"; then
+  if [[ "$DRY_RUN" == true ]]; then
+    dry "Would install Oh My Zsh"
+  else
+    RUNZSH=no CHSH=no sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" || fail "Oh My Zsh install failed"
+    [[ -d "$HOME/.oh-my-zsh" ]] && success "Oh My Zsh" || fail "Oh My Zsh"
+  fi
+else
+  skip "Oh My Zsh"
+fi
+echo ""
+
 SHELL_HEADER
 
   if [[ "$SELECTIVE_ZSHRC" == true ]]; then
