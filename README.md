@@ -22,6 +22,23 @@ chmod +x setup-new-mac.sh
 
 # Preview without making changes:
 ./setup-new-mac.sh --dry-run
+
+# Resume a partial run (skip sections already completed):
+./setup-new-mac.sh --skip shell,brew
+```
+
+## Generated Script Options
+
+```
+./setup-new-mac.sh [OPTIONS]
+
+  --dry-run        Preview what would be installed without making changes
+  --yes, -y        Auto-accept all prompts
+  --accept ITEMS   Auto-accept items matching comma-separated list
+                   Example: --accept 'Slack,Chrome,1Password'
+  --skip SECTIONS  Skip entire sections (comma-separated)
+                   Valid: brew,shell,apps,claude,cursor,xcode,git,ssh,infra,repos,version-managers,tools,macos
+                   Example: --skip shell,brew
 ```
 
 ## Generator Options
@@ -73,9 +90,9 @@ Other:
 | Section | Source | Install Action |
 |---------|--------|----------------|
 | Homebrew | `brew list`, `brew tap` | Install taps, formulae, casks |
-| Shell Config | ~/.zshrc, ~/.zprofile, ~/.zshenv | Full replacement or per-line append |
+| Shell Config | ~/.zshrc, ~/.zprofile, ~/.zshenv | Install Oh My Zsh, then full replacement or per-line append |
 | Applications | /Applications/ scan | `brew install --cask` or `mas install` |
-| Claude Code | MCPs, plugins, settings, CLAUDE.md, hooks | `claude mcp add-json`, file writes |
+| Claude Code | MCPs, plugins, settings, CLAUDE.md, hooks | Install CLI via npm, `claude mcp add-json`, file writes |
 | Cursor | Settings, keybindings, MCP, rules | File writes |
 | Xcode | Themes, snippets, keybindings | Copy to UserData |
 | Git | ~/.gitconfig, ~/.gitignore_global | File writes |
