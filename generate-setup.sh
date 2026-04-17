@@ -39,20 +39,24 @@ else
   emit_preamble
 fi
 
+# Helpers to wrap generated sections with skip guards
+_guard()     { [[ "$DRY_RUN" != true ]] && printf '\nif section_active "%s"; then\n' "$1" >> "$SCRIPT_FILE" || true; }
+_guard_end() { [[ "$DRY_RUN" != true ]] && printf '\nfi  # end section: %s\n' "$1" >> "$SCRIPT_FILE" || true; }
+
 # Run each enabled section
-section_enabled "brew"              && scan_brew
-section_enabled "shell"             && scan_shell
-section_enabled "apps"              && scan_apps
-section_enabled "claude"            && scan_claude
-section_enabled "cursor"            && scan_cursor
-section_enabled "xcode"             && scan_xcode
-section_enabled "git"               && scan_git
-section_enabled "ssh"               && scan_ssh
-section_enabled "infra"             && scan_infra
-section_enabled "repos"             && scan_repos
-section_enabled "version-managers"  && scan_version_managers
-section_enabled "tools"             && scan_tools
-section_enabled "macos"             && scan_macos
+if section_enabled "brew";             then _guard "brew";             scan_brew;             _guard_end "brew";            fi
+if section_enabled "shell";            then _guard "shell";            scan_shell;            _guard_end "shell";           fi
+if section_enabled "apps";             then _guard "apps";             scan_apps;             _guard_end "apps";            fi
+if section_enabled "claude";           then _guard "claude";           scan_claude;           _guard_end "claude";          fi
+if section_enabled "cursor";           then _guard "cursor";           scan_cursor;           _guard_end "cursor";          fi
+if section_enabled "xcode";            then _guard "xcode";            scan_xcode;            _guard_end "xcode";           fi
+if section_enabled "git";              then _guard "git";              scan_git;              _guard_end "git";             fi
+if section_enabled "ssh";              then _guard "ssh";              scan_ssh;              _guard_end "ssh";             fi
+if section_enabled "infra";            then _guard "infra";            scan_infra;            _guard_end "infra";           fi
+if section_enabled "repos";            then _guard "repos";            scan_repos;            _guard_end "repos";           fi
+if section_enabled "version-managers"; then _guard "version-managers"; scan_version_managers; _guard_end "version-managers"; fi
+if section_enabled "tools";            then _guard "tools";            scan_tools;            _guard_end "tools";           fi
+if section_enabled "macos";            then _guard "macos";            scan_macos;            _guard_end "macos";           fi
 
 if [[ "$DRY_RUN" != true ]]; then
   emit_secrets

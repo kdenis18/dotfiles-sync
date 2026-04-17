@@ -33,6 +33,7 @@ set -euo pipefail
 DRY_RUN=false
 ACCEPT_ALL=false
 ACCEPT_LIST=""
+SKIP_SECTIONS=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -40,17 +41,27 @@ while [[ $# -gt 0 ]]; do
     --yes|-y) ACCEPT_ALL=true; shift ;;
     --accept)
       ACCEPT_LIST="$2"; shift 2 ;;
+    --skip)
+      SKIP_SECTIONS="$2"; shift 2 ;;
     -h|--help)
-      echo "Usage: $0 [--dry-run] [--yes] [--accept ITEMS]"
+      echo "Usage: $0 [--dry-run] [--yes] [--accept ITEMS] [--skip SECTIONS]"
       echo ""
       echo "  --dry-run        Preview what would be installed without making changes"
       echo "  --yes, -y        Auto-accept all prompts"
       echo "  --accept ITEMS   Auto-accept items matching comma-separated list"
       echo "                   Example: --accept 'Slack,Chrome,1Password'"
+      echo "  --skip SECTIONS  Skip entire sections (comma-separated)"
+      echo "                   Valid: brew,shell,apps,claude,cursor,xcode,git,ssh,infra,repos,version-managers,tools,macos"
+      echo "                   Example: --skip shell,brew"
       exit 0 ;;
     *) echo "Unknown option: $1"; exit 1 ;;
   esac
 done
+
+section_active() {
+  local name="$1"
+  [[ ",$SKIP_SECTIONS," != *",$name,"* ]]
+}
 
 # ── Sudo Keepalive ──────────────────────────────────────────────────────────
 if [[ "$DRY_RUN" != true ]]; then
